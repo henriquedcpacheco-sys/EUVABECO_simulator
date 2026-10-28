@@ -37,7 +37,8 @@ marimo edit app.py         # the notebook, to change the code
   `public/data/*.json` by `scripts/build_data.py`.
 - The scenarios integrate the ODE model in `simulate()` (classical Runge-Kutta 4,
   20 steps per day), the same equations as `d2_rhs.m`.
-- Charts are Plotly figures built in Python.
+- Charts are Plotly figures built in Python; the controls are marimo's own
+  widgets (`mo.ui.radio`, `mo.ui.slider`, `mo.ui.tabs`, ...).
 
 ## Files
 
@@ -45,7 +46,6 @@ marimo edit app.py         # the notebook, to change the code
 |---|---|
 | `app.py` | The whole app: constants, data loading, the ODE simulator, the Plotly charts, and one cell per part of the page |
 | `custom.css` | Page styles (colours, layout, cards, tables) |
-| `public/ui.js`, `public/ui.css` | Look of the buttons, sliders, tabs and chart frames (the `UI` widget in `app.py`) |
 | `public/data/` | Precomputed results (JSON), model reference PNG/PDF |
 | `scripts/build_data.py` | Rebuilds `public/data/` from the exports of the fitting code |
 

@@ -1,11 +1,9 @@
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
-#     "anywidget",
 #     "marimo",
 #     "numpy",
 #     "plotly",
-#     "traitlets",
 # ]
 # ///
 import marimo
@@ -24,20 +22,20 @@ with app.setup:
     #
     # Reading order: constants -> data -> simulator -> charts -> HTML helpers
     # -> page cells (top bar, hero, modes, fit modes 1/2, scenarios, footer).
+    import io
     import json
-    from datetime import datetime, timedelta, timezone
+    import zipfile
+    from datetime import date, datetime, timedelta, timezone
     from functools import cache
     from pathlib import Path
 
-    import anywidget
     import marimo as mo
     import numpy as np
     import plotly.graph_objects as go
-    import traitlets
 
     # ------------------------------------------------------------------
-    # Files in public/ (data, icons, the widget kit). Locally they are read
-    # from disk; on GitHub Pages they are fetched from the site.
+    # Files in public/ (data and icons). Locally they are read from disk;
+    # on GitHub Pages they are fetched from the site.
     # ------------------------------------------------------------------
     def read_public(rel: str) -> str:
         loc = str(mo.notebook_location() / "public" / rel)
@@ -64,37 +62,6 @@ with app.setup:
         return json.loads(read_public(f"data/{name}.json"))
 
     ICONS = json.loads(read_public("icons.json"))
-
-    class UI(anywidget.AnyWidget):
-        """Every control and chart on the page. `kind` picks the drawing in
-        public/ui.js; `props` are its options; the user's choice comes back
-        in `value` (or `clicks` for buttons)."""
-
-        _esm = read_public("ui.js")
-        _css = read_public("ui.css")
-        kind = traitlets.Unicode("").tag(sync=True)
-        props = traitlets.Dict({}).tag(sync=True)
-        value = traitlets.Any(None).tag(sync=True)
-        clicks = traitlets.Int(0).tag(sync=True)
-
-    _seen_clicks = {}
-
-    def clicked(button) -> bool:
-        """True once for each new click of a button widget. A cell that
-        watches a button can also re-run for other reasons; this tells a
-        real click apart."""
-        raw = button.widget
-        if raw.clicks > _seen_clicks.get(id(raw), 0):
-            _seen_clicks[id(raw)] = raw.clicks
-            return True
-        return False
-
-    def widget(kind: str, value=None, **props):
-        """A UI widget and the marimo element that shows it: (raw, element).
-        Read `element.value` to react to the user; set `raw.value` from
-        Python to change what is shown without re-running cells."""
-        raw = UI(kind=kind, props=props, value=value)
-        return raw, mo.ui.anywidget(raw)
 
     # ------------------------------------------------------------------
     # Series, models, dates and texts
@@ -185,7 +152,11 @@ with app.setup:
         dict(value="vaccination", n=4, title="Model with vaccination", caption="Not available yet", icon=ICONS["syringe"], soon=True),
     ]
     REPO_URL = "https://github.com/henriquedcpacheco-sys/EUVABECO_simulator"
-    ZOOM_HINT = "Ctrl + scroll (or pinch) to zoom, drag to move, double-click to reset."
+    ZOOM_HINT = "Drag to move along the time axis; the toolbar at the top right of a plot zooms, resets, or saves it as PNG. Double-click to reset."
+    # Plotly toolbar shown when hovering a chart
+    PLOT_CONFIG = {"displaylogo": False, "scrollZoom": False, "doubleClick": "reset",
+                   "modeBarButtonsToRemove": ["select2d", "lasso2d", "autoScale2d"],
+                   "toImageButtonOptions": {"format": "png", "scale": 2}}
 
     # ------------------------------------------------------------------
     # The ODE model (same as Tese/D2/d2_rhs.m and the Streamlit simulator.py)
@@ -453,6 +424,7 @@ def base_layout(title: str | None = None, top: int | None = None) -> dict:
         hovermode="x unified",
         hoverlabel=dict(bgcolor="#ffffff", bordercolor=CT["border"], font=dict(family=FONT, size=12, color=CT["text"])),
         dragmode="pan",
+        modebar=dict(bgcolor="rgba(255,255,255,0.85)", color=CT["muted"], activecolor=CT["text"]),
     )
 
 
@@ -493,14 +465,8 @@ def marks(start: int, end: int, window: tuple | None = None, rt_line: bool = Fal
 
 
 @app.function
-def figure_json(fig) -> dict:
-    """Plotly figure -> plain JSON for the chart widget."""
-    return json.loads(fig.to_json())
-
-
-@app.function
 def time_panel(times: list, layers: list, start: int, end: int, title: str | None = None,
-               window=None, rt_line=False, y_digits=None, y_title=None) -> dict:
+               window=None, rt_line=False, y_digits=None, y_title=None) -> go.Figure:
     """Layers: ("dots", name, values, color), ("line", name, values, color, width),
     ("band", name, lo, hi, color, opacity)."""
     idx = [i for i, t in enumerate(times) if start <= t <= end]
@@ -528,7 +494,7 @@ def time_panel(times: list, layers: list, start: int, end: int, title: str | Non
     fig.update_layout(**base_layout(title), xaxis=time_axis(start, end),
                       yaxis=value_axis(y_digits, y_title),
                       shapes=marks(start, end, window, rt_line))
-    return figure_json(fig)
+    return fig
 
 
 @app.function
@@ -562,7 +528,7 @@ def overlay_chart(start: int, end: int, left: dict, right: dict, window=None) ->
                           dict(text=f"<b>{right['name']}</b>", xref="paper", yref="paper", x=1, y=1.03,
                                xanchor="right", yanchor="bottom", showarrow=False, font=dict(size=12, color=right["color"])),
                       ])
-    return figure_json(fig)
+    return fig
 
 
 @app.function
@@ -580,7 +546,7 @@ def residual_chart(weeks: list, stacks: list, start: int, end: int) -> dict:
                               font=dict(size=12, color=CT["text"])))
     fig.update_layout(**layout, xaxis=time_axis(start, end), yaxis=value_axis(0), shapes=marks(start, end))
     fig.update_xaxes(hoverformat="Week of %d/%m/%Y")
-    return figure_json(fig)
+    return fig
 
 
 @app.function
@@ -608,7 +574,7 @@ def histogram_chart(title: str, edges: list, counts: list, mean: float, ls: floa
                  line=dict(color=CT["text"], width=1.4, dash="4px,3px"), opacity=0.7),
         ],
     )
-    return figure_json(fig)
+    return fig
 
 
 @app.function
@@ -627,13 +593,14 @@ def compare_chart(items: list, y_title: str, is_rt: bool) -> dict:
                               font=dict(size=12, color=CT["text"])))
     fig.update_layout(**layout, xaxis=time_axis(start, end), yaxis=value_axis(1 if is_rt else None, y_title),
                       shapes=marks(start, end, rt_line=is_rt))
-    return figure_json(fig)
+    return fig
 
 
 @app.function
-def chart(figure: dict, height: int = 260):
-    """A chart widget (with its Enlarge button)."""
-    return mo.ui.anywidget(UI(kind="chart", props={"figure": figure, "height": height}))
+def chart(fig, height: int = 260) -> str:
+    """HTML of an interactive Plotly chart, to place inside the page HTML."""
+    fig = go.Figure(fig).update_layout(height=height)
+    return mo.ui.plotly(fig, config=PLOT_CONFIG).text
 
 
 # =========================================================================
@@ -706,7 +673,7 @@ def chart_card(chart_el, color: str | None = None) -> str:
 @app.function
 def panel_grid(cards: list, cols: int = 2) -> str:
     return (f'<div class="stack" style="--g:0"><div class="{"grid4" if cols == 4 else "grid2"}">{"".join(cards)}</div>'
-            f'<p class="small" style="margin-top:8px">{ZOOM_HINT} Use <strong>Enlarge</strong> on a plot to see it bigger.</p></div>')
+            f'<p class="small" style="margin-top:8px">{ZOOM_HINT}</p></div>')
 
 
 @app.function
@@ -766,39 +733,64 @@ def metrics_view(m: dict, intro: str = "") -> str:
             f'{table([("series", "Series"), ("day", "Peak day", "r"), ("value", "Peak value", "r")], rows)}</div></div>')
 
 
+
+# =========================================================================
+# Overlay picker and downloads, shared by the fit and scenario modes
+# =========================================================================
 @app.function
 def overlay_widgets():
     """The overlay picker: a preset, or any two series ("Custom")."""
     presets = ["Rₜ vs Daily cases", "Daily cases vs General ward", "Daily cases vs Daily deaths", "Custom"]
     names = ["Rₜ", "Daily cases", "General ward", "ICU", "Daily deaths"]
-    _, preset = widget("segmented", presets[0], options=[dict(value=p, label=p) for p in presets], size="sm")
-    _, left = widget("select", "Daily cases", options=names)
-    _, right = widget("select", "Daily deaths", options=names)
+    preset = mo.ui.radio(presets, value=presets[0], inline=True)
+    left = mo.ui.dropdown(names, value="Daily cases", label="Left y-axis")
+    right = mo.ui.dropdown(names, value="Daily deaths", label="Right y-axis")
     return preset, left, right
 
 
 @app.function
 def overlay_pair(preset, left, right) -> tuple:
-    p = preset.value.get("value")
-    if p == "Custom":
-        return left.value.get("value"), right.value.get("value")
-    a, b = p.split(" vs ")
+    if preset.value == "Custom":
+        return left.value, right.value
+    a, b = preset.value.split(" vs ")
     return a, b
 
 
 @app.function
 def overlay_picker_html(preset, left, right) -> str:
     custom = ""
-    if preset.value.get("value") == "Custom":
-        custom = (f'<div class="grid2" style="max-width:36rem;margin-top:12px">{field(left.text, "Left y-axis")}'
-                  f'{field(right.text, "Right y-axis")}</div>')
+    if preset.value == "Custom":
+        custom = f'<div class="grid2" style="max-width:36rem;margin-top:12px"><div>{left}</div><div>{right}</div></div>'
     return f"<div>{preset}{custom}</div>"
 
 
+@app.function
+def figures_html(title: str, figures: list) -> str:
+    """A stand-alone HTML page with interactive charts, for the downloads."""
+    parts = [go.Figure(f).update_layout(height=360).to_html(full_html=False, include_plotlyjs="cdn" if i == 0 else False)
+             for i, f in enumerate(figures)]
+    return (f'<!doctype html><html><head><meta charset="utf-8"><title>{title}</title></head>'
+            f'<body style="font-family:system-ui,sans-serif;max-width:1100px;margin:24px auto"><h2>{title}</h2>'
+            + "".join(parts) + "</body></html>")
+
+
+@app.function
+def zip_bytes(files: dict) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, text in files.items():
+            z.writestr(name, text)
+    return buf.getvalue()
+
+
+# =========================================================================
+# Page: top bar, hero, mode selector
+# =========================================================================
 @app.cell(hide_code=True)
 def _():
-    # Top bar: the About and Model scheme dialogs open in the browser.
-    about = (
+    # Top bar. "About" and "Model scheme" are <details> elements: a click
+    # opens the dialog, a click outside it closes it (HTML and CSS only).
+    _about = (
         "<p>We provide a tool in which it is possible to explore how COVID-19 spreads in a particular setting, and how "
         "different factors influence the course of an outbreak, through our interactive online simulator. We have "
         "adjusted the model to epidemiological data from Portugal (<a href='https://github.com/dssg-pt/covid19pt-data'>DSSG Portugal</a>; "
@@ -813,25 +805,36 @@ def _():
         "aggregated nation-level data for Portugal, the platform can be flexibly extended to model specific regional "
         "data of the same type and resolution.</p>"
     )
-    scheme = "".join(
+    _pdf = public_url("data/model_reference.pdf")
+    _scheme = "".join(
         f'<img src="{public_url(f"data/model_reference-{i}.png")}" alt="Model reference, page {i}" loading="lazy">'
         for i in (1, 2)
-    ) + (f'<a href="{public_url("data/model_reference.pdf")}" download '
-         f'style="display:inline-flex;align-items:center;gap:8px;font-size:13.5px;font-weight:500">'
-         f'{icon("file-down")}Download the equations (PDF)</a>')
-    _, topbar = widget(
-        "header", logo=public_url("favicon.svg"), pdf=public_url("data/model_reference.pdf"), repo=REPO_URL,
-        about=about, scheme=scheme,
-        icons=dict(info=ICONS["info"], sigma=ICONS["sigma"], pdf=ICONS["file-down"], repo=ICONS["git-branch"]),
-    )
-    mo.Html(f'<div class="topbar-anchor"></div>{topbar}')
+    ) + (f'<a href="{_pdf}" download="model_reference.pdf" style="display:inline-flex;align-items:center;gap:8px;'
+         f'font-size:13.5px;font-weight:500">{icon("file-down")}Download the equations (PDF)</a>')
+
+    def _dialog(button, title, body, wide=False):
+        return (f'<details class="dlg"><summary class="top-btn">{button}</summary>'
+                f'<div class="modal-back"><div class="modal {"wide" if wide else ""}" role="dialog" aria-label="{title}">'
+                f'<div class="modal-head"><h2>{title}</h2><span class="close-hint">Click outside to close</span></div>'
+                f'<div class="modal-body">{body}</div></div></div></details>')
+
+    mo.Html(f"""<div class="topbar-anchor"></div>
+    <header class="topbar"><div class="hero-line"></div><div class="topbar-in">
+      <img src="{public_url('favicon.svg')}" alt="" class="logo">
+      <div class="brand"><div class="name">COVID-19 Model Simulator</div><div class="sub">EUVABECO · CEMAT · Portugal 2020</div></div>
+      <nav>
+        {_dialog(f'{icon("info")}<span>About</span>', "Welcome to the Online COVID-19 Simulator", _about)}
+        {_dialog(f'{icon("sigma")}<span>Model scheme</span>', "Model scheme and equations", _scheme, wide=True)}
+        <a class="top-btn pdf" href="{_pdf}" download="model_reference.pdf">{icon("file-down")}<span>Equations (PDF)</span></a>
+        <a class="top-btn square" href="{REPO_URL}" target="_blank" rel="noreferrer" aria-label="Source code on GitHub">{icon("git-branch")}</a>
+      </nav></div></header>""")
     return
 
 
 @app.cell(hide_code=True)
 def _():
     # Hero, with decorative epidemic curves in the series colours.
-    curves = """
+    _curves = """
     <svg class="curves" aria-hidden="true" viewBox="0 0 800 260" preserveAspectRatio="none">
       <path d="M0 230 C 120 230 150 150 200 150 S 260 225 330 225 S 470 225 540 160 S 640 40 690 60 S 760 140 800 150" fill="none" stroke="#56B4E9" stroke-width="3" stroke-linecap="round" opacity=".9"/>
       <path d="M0 240 C 140 240 170 185 220 185 S 290 235 360 235 S 500 232 570 190 S 660 95 710 100 S 770 160 800 165" fill="none" stroke="#F0B23A" stroke-width="2.5" stroke-linecap="round" opacity=".8"/>
@@ -840,7 +843,7 @@ def _():
       """ + "".join(f'<line x1="{x}" x2="{x}" y1="20" y2="260" stroke="white" stroke-opacity=".18" stroke-dasharray="5 6"/>'
                     for x in (200, 330, 540, 690)) + "</svg>"
     mo.Html(f"""
-    <section class="hero">{curves}
+    <section class="hero">{_curves}
       <div class="in">
         <div class="pill"><i></i>Online COVID-19 simulator</div>
         <h1>COVID-19 Model Simulator — Portugal</h1>
@@ -856,8 +859,9 @@ def _():
 @app.cell(hide_code=True)
 def _():
     # Mode selector, overlapping the bottom of the hero.
-    _, mode_picker = widget("modes", "early", options=MODES)
-    return (mode_picker,)
+    MODE_TABS = {f"Mode {m['n']}{' · soon' if m.get('soon') else ''} — {m['title']}": m["value"] for m in MODES}
+    mode_picker = mo.ui.tabs({k: "" for k in MODE_TABS})
+    return MODE_TABS, mode_picker
 
 
 @app.cell(hide_code=True)
@@ -867,8 +871,8 @@ def _(mode_picker):
 
 
 @app.cell(hide_code=True)
-def _(mode_picker):
-    mode = mode_picker.value.get("value") or "early"
+def _(MODE_TABS, mode_picker):
+    mode = MODE_TABS.get(mode_picker.value, "early")
     return (mode,)
 
 
@@ -882,57 +886,53 @@ def _(mode):
     _ = mode
     observed = load("observed")
     obs_times = [day_to_time(iso_to_day(observed["start"]) + i) for i in range(observed["n"])]
-    fit_period_raw, fit_period = widget(
-        "range", [0, observed["n"] - 1], min=0, max=observed["n"] - 1, labels=[fmt_date(t) for t in obs_times])
-    fit_model_raw, fit_model = widget(
-        "radiocards", None, options=[dict(value=k, label=v[0], caption=v[2]) for k, v in MODEL_OPTIONS.items()])
-    fit_run_raw, fit_run = widget("button", label="Run model fitting", icon=ICONS["play"], variant="primary", full=True)
-    fit_tab_options = [dict(value="data", label="Data and fixed dates", icon=ICONS["chart-line"]),
-                       dict(value="params", label="Parameters", icon=ICONS["square-function"]),
-                       dict(value="fit", label="Fitted model", icon=ICONS["search-check"])]
-    fit_tabs_raw, fit_tabs = widget("tabs", "data", options=fit_tab_options)
-    fit_bands_raw, fit_bands = widget(
-        "toggle", False, label="Show 95% Bayesian bands (MCMC)",
-        hint="Switches from the least-squares point estimates to the Bayesian posterior: credible and predictive "
-             "bands, the model at the posterior-mean parameters, and the posterior of every parameter.")
-    _views = ["Fit", "Fit quality", "Parameters", "Rₜ", "Epidemic metrics", "Overlay"]
-    _, fit_view = widget("segmented", "Fit", options=[dict(value=v, label=v) for v in _views])
+    get_fit_ran, set_fit_ran = mo.state(None)                       # model key of the last run
+    get_fit_tab, set_fit_tab = mo.state("Data and fixed dates")     # open tab
+    get_fit_bands, set_fit_bands = mo.state(False)                  # Bayesian bands on/off
+
+    fit_model = mo.ui.radio({v[0]: k for k, v in MODEL_OPTIONS.items()})
+    _first, _last = (datetime.fromtimestamp(t / 1000, tz=timezone.utc).date() for t in (obs_times[0], obs_times[-1]))
+    fit_period = mo.ui.date_range(start=_first, stop=_last, value=(_first, _last), full_width=True)
+
+    def _run(clicks):
+        # Always the least-squares fit first, bands off, Fitted model tab open.
+        if fit_model.value:
+            set_fit_ran(POINT_KEY[fit_model.value])
+            set_fit_bands(False)
+            set_fit_tab("Fitted model")
+        return clicks + 1
+
+    fit_run = mo.ui.button(label="▶  Run model fitting", value=0, on_click=_run, kind="success", full_width=True)
+    fit_view = mo.ui.radio(["Fit", "Fit quality", "Parameters", "Rₜ", "Epidemic metrics", "Overlay"], value="Fit", inline=True)
     fit_ov_preset, fit_ov_left, fit_ov_right = overlay_widgets()
-    get_fit_ran, set_fit_ran = mo.state(None)   # model key of the last run
-    return (fit_bands, fit_bands_raw, fit_model, fit_model_raw, fit_ov_left, fit_ov_preset,
-            fit_ov_right, fit_period, fit_run, fit_run_raw, fit_tab_options, fit_tabs, fit_tabs_raw,
-            fit_view, get_fit_ran, obs_times, observed, set_fit_ran)
+    return (fit_model, fit_ov_left, fit_ov_preset, fit_ov_right, fit_period, fit_run, fit_view, get_fit_bands,
+            get_fit_ran, get_fit_tab, obs_times, observed, set_fit_bands, set_fit_tab)
 
 
 @app.cell(hide_code=True)
-def _(fit_bands_raw, fit_model_raw, fit_run, fit_tab_options, fit_tabs_raw, set_fit_ran):
-    # "Run model fitting": always the least-squares fit first, bands off,
-    # and open the Fitted model tab.
-    if clicked(fit_run) and fit_model_raw.value:
-        set_fit_ran(POINT_KEY[fit_model_raw.value])
-        fit_bands_raw.value = False
-        fit_tabs_raw.value = "fit"
-        fit_tabs_raw.props = {"options": [dict(o, badge="dot") if o["value"] == "fit" else o for o in fit_tab_options]}
-    return
+def _(get_fit_bands, get_fit_tab, set_fit_bands, set_fit_tab):
+    # Tab bar and bands switch follow the state, so a run can reset them.
+    fit_tabs = mo.ui.tabs({"Data and fixed dates": "", "Parameters": "", "Fitted model": ""},
+                          value=get_fit_tab(), on_change=set_fit_tab)
+    fit_bands = mo.ui.switch(value=get_fit_bands(), on_change=set_fit_bands, label="**Show 95% Bayesian bands (MCMC)**")
+    return fit_bands, fit_tabs
 
 
 @app.cell(hide_code=True)
-def _(fit_model, fit_period, fit_run, fit_run_raw, mode):
+def _(fit_model, fit_period, fit_run, mode):
     # Left column of the fit modes
+    _out = None
     if mode in ("early", "partial"):
-        fit_run_raw.props = dict(fit_run_raw.props, disabled=not fit_model.value.get("value"),
-                                 title="" if fit_model.value.get("value") else "Pick a model first.")
         _period = ""
         if mode == "partial":
-            _period = field(fit_period.text, "Period to display",
+            _period = field(f"{fit_period}", "Period to display",
                             "All models were fitted on the whole of 2020. This selects the window shown in every plot.")
-        _body = (f'<div class="stack">{_period}'
-                 f'{field(fit_model.text, "Model", "The models differ in how the hospitalisation probability ψ is constructed.")}'
-                 f"{fit_run}</div>")
+        _captions = "".join(f"<li><strong>{v[1]}</strong>: {v[2]}</li>" for v in MODEL_OPTIONS.values())
+        _hint = ('The models differ in how the hospitalisation probability ψ is constructed:'
+                 f'<ul style="margin:4px 0 0;padding-left:1.1rem">{_captions}</ul>')
+        _body = f'<div class="stack">{_period}{field(f"{fit_model}", "Model", _hint)}{fit_run}</div>'
         _sub = "Choose the period and a model." if mode == "partial" else "Whole of 2020. Choose a model."
         _out = page(mode, card(_body, "Set up the fit", _sub, "sliders-horizontal", accent=True), "side")
-    else:
-        _out = None
     _out
     return
 
@@ -951,9 +951,10 @@ def _(
     fit_ov_preset,
     fit_ov_right,
     fit_period,
-    fit_tabs,
     fit_view,
+    get_fit_bands,
     get_fit_ran,
+    get_fit_tab,
     mode,
     obs_times,
     observed,
@@ -1018,8 +1019,7 @@ def _(
         for name, m in comp.items():
             bar = (f'<div class="jbar"><div class="tr"><i style="width:{100 * m["J"]["total"] / max_j:.1f}%"></i></div>'
                    f'<b>{fmt_num(m["J"]["total"])}</b></div>')
-            rows.append(dict(name=name, n=str(m["nEst"]), total=bar,
-                             **{k: fmt_num(m["J"][k]) for k in SERIES}))
+            rows.append(dict(name=name, n=str(m["nEst"]), total=bar, **{k: fmt_num(m["J"][k]) for k in SERIES}))
         cols = [("name", "Model", "b"), ("n", "Estimated parameters", "r"),
                 *[(k, f"J — {'ICU' if k == 'icu' else k}", "r") for k in SERIES], ("total", "J — total")]
         return card(table(cols, rows), "Models at a glance",
@@ -1129,41 +1129,41 @@ def _(
             param_rows = [dict(name=param_symbol(p["name"]), value=fmt_sig(p["value"]), meaning=param_meaning(p["name"]))
                           for p in fit["params"]]
 
-        # ---- ZIP download (charts are drawn as PNG in the browser)
-        comparison = load("comparison")
-        models = list(comparison["models"])
-        comp_csv_rows = [[param_symbol(p), *[comparison["models"][mm]["params"][p] for mm in models]] for p in comparison["order"]]
-        comp_csv_rows.append(["Number of estimated parameters", *[comparison["models"][mm]["nEst"] for mm in models]])
-        for k, l in [("cases", "J — cases"), ("ward", "J — ward"), ("icu", "J — ICU"), ("deaths", "J — deaths"), ("total", "J — total")]:
-            comp_csv_rows.append([l, *[comparison["models"][mm]["J"][k] for mm in models]])
-        files = {
-            "all_models_comparison.csv": to_csv(["Parameter / error", *models], comp_csv_rows),
-            "metrics.csv": to_csv(["Metric", "Simulated"], metrics_csv_rows(m)),
-            "objective_function_J.csv": (
-                to_csv(["Series", "J at posterior-mean parameters", "Posterior mean of J", "95% interval of J"],
-                       [[r["Series"], round(r["a"], 1), round(r["b"], 1), f"[{fmt_num(r['lo'])}, {fmt_num(r['hi'])}]"] for r in j_rows])
-                if bayes else to_csv(["Series", "J"], [[r["Series"], round(r["a"], 1)] for r in j_rows])),
-            "weekly_residual_breakdown.csv": to_csv(["week", *SERIES], [[fmt_date(w), *[round(wvals[s][i], 4) for s in SERIES]]
-                                                                       for i, w in enumerate(weeks)]),
-            "estimated_parameters.csv": (
-                to_csv(["Parameter", "Least-squares estimate (start of the centred chain)", "Posterior mean", "95% CI", "Meaning"],
-                       [[r["name"], r["ls"], r["mean"], r["ci"], r["meaning"]] for r in param_rows])
-                if bayes else to_csv(["Parameter", "Estimate", "Meaning"], [[r["name"], r["value"], r["meaning"]] for r in param_rows])),
-        }
-        images = [dict(name="fitted_model.png", figures=fit_figs, cols=2, width=520, height=280, title=label),
-                  dict(name="weekly_residual_breakdown.png", figures=[resid_fig], title="Weekly squared log-residuals", height=320),
-                  dict(name="effective_reproduction_number.png", figures=[rt_fig], title="Effective reproduction number Rₜ"),
-                  dict(name="overlay.png", figures=[ov_fig], title=f"{pair[0]} (left) vs {pair[1]} (right) — simulated", height=340)]
-        if bayes:
-            files["model_comparison_J.csv"] = to_csv(["Model", "J (total)"], [[r["Model"], round(r["J"], 1)] for r in comp_rows])
-            images.append(dict(name="posterior_histograms.png", figures=hist_figs, cols=4, width=260, height=180,
-                               title="Posterior distributions of the parameters"))
-        _, download = widget("download", label="Download results (ZIP)", icon=ICONS["download"], variant="primary",
-                             title="This model's tables and figures, and the comparison with all models.",
-                             filename=f"{key}_results.zip", files=files, images=images, zip=True)
+        # ---- ZIP download: tables as CSV, charts as interactive HTML pages
+        def build_zip():
+            comparison = load("comparison")
+            models = list(comparison["models"])
+            comp_csv = [[param_symbol(p), *[comparison["models"][mm]["params"][p] for mm in models]] for p in comparison["order"]]
+            comp_csv.append(["Number of estimated parameters", *[comparison["models"][mm]["nEst"] for mm in models]])
+            for k, l in [("cases", "J — cases"), ("ward", "J — ward"), ("icu", "J — ICU"), ("deaths", "J — deaths"), ("total", "J — total")]:
+                comp_csv.append([l, *[comparison["models"][mm]["J"][k] for mm in models]])
+            files = {
+                "all_models_comparison.csv": to_csv(["Parameter / error", *models], comp_csv),
+                "metrics.csv": to_csv(["Metric", "Simulated"], metrics_csv_rows(m)),
+                "objective_function_J.csv": (
+                    to_csv(["Series", "J at posterior-mean parameters", "Posterior mean of J", "95% interval of J"],
+                           [[r["Series"], round(r["a"], 1), round(r["b"], 1), f"[{fmt_num(r['lo'])}, {fmt_num(r['hi'])}]"] for r in j_rows])
+                    if bayes else to_csv(["Series", "J"], [[r["Series"], round(r["a"], 1)] for r in j_rows])),
+                "weekly_residual_breakdown.csv": to_csv(["week", *SERIES], [[fmt_date(w), *[round(wvals[s][i], 4) for s in SERIES]]
+                                                                           for i, w in enumerate(weeks)]),
+                "estimated_parameters.csv": (
+                    to_csv(["Parameter", "Least-squares estimate (start of the centred chain)", "Posterior mean", "95% CI", "Meaning"],
+                           [[r["name"], r["ls"], r["mean"], r["ci"], r["meaning"]] for r in param_rows])
+                    if bayes else to_csv(["Parameter", "Estimate", "Meaning"], [[r["name"], r["value"], r["meaning"]] for r in param_rows])),
+                "fitted_model.html": figures_html(label, fit_figs),
+                "weekly_residual_breakdown.html": figures_html("Weekly squared log-residuals", [resid_fig]),
+                "effective_reproduction_number.html": figures_html("Effective reproduction number Rₜ", [rt_fig]),
+                "overlay.html": figures_html(f"{pair[0]} (left) vs {pair[1]} (right) — simulated", [ov_fig]),
+            }
+            if bayes:
+                files["model_comparison_J.csv"] = to_csv(["Model", "J (total)"], [[r["Model"], round(r["J"], 1)] for r in comp_rows])
+                files["posterior_histograms.html"] = figures_html("Posterior distributions of the parameters", hist_figs)
+            return zip_bytes(files)
+
+        download = mo.download(data=build_zip, filename=f"{key}_results.zip", label="Download results (ZIP)")
 
         # ---- the open view
-        view = fit_view.value.get("value")
+        view = fit_view.value
         if view == "Fit":
             leg = (legend([("dot", CT["obs"], "Observed"), ("line", CT["muted"], "Model at posterior-mean parameters"),
                            ("band", CT["muted"], "95% credible interval"), ("band-light", CT["muted"], "95% posterior predictive"),
@@ -1202,7 +1202,7 @@ def _(
             body = (card(f'<div class="lede" style="font-size:14px"><p style="margin:0 0 12px">{intro}</p>'
                          f'<div class="formula">{formula.text}</div>{more}</div>{tables}',
                          "Fit quality of the posterior" if bayes else "Objective function")
-                    + card(chart(resid_fig, 320).text, "Weekly residual breakdown",
+                    + card(chart(resid_fig, 320), "Weekly residual breakdown",
                            "Weekly sum of squared log-residuals, stacked by series"
                            + (", between the data and the solid line (model at the posterior-mean parameters)." if bayes else ".")))
         elif view == "Parameters":
@@ -1219,7 +1219,7 @@ def _(
             else:
                 body = table([("name", "Parameter", "b nw"), ("value", "Estimate", "r"), ("meaning", "Meaning", "soft")], param_rows)
         elif view == "Rₜ":
-            body = card(chart(rt_fig, 300).text, "Effective reproduction number",
+            body = card(chart(rt_fig, 300), "Effective reproduction number",
                         "Rₜ = β(t)(1/γ_C + 1/γ_I) · S(t)/N.  Rₜ > 1: the epidemic grows. Rₜ < 1: the epidemic shrinks.")
         elif view == "Epidemic metrics":
             body = metrics_view(m, f"Summary of the simulated trajectories over the period shown "
@@ -1232,9 +1232,11 @@ def _(
                         f"{chart(ov_fig, 360)}{note}</div>", "Overlay",
                         "Compare two simulated series on the same time axis, each with its own y-axis, so that their different "
                         "scales do not matter.")
+        hint = ('<span class="hint-under">Switches from the least-squares point estimates to the Bayesian posterior: credible '
+                'and predictive bands, the model at the posterior-mean parameters, and the posterior of every parameter.</span>')
         return f"""<div class="stack">
           <div class="result-head"><div><h2>{label}</h2><p>{fmt_date(start)} – {fmt_date(end)}</p></div>{download}</div>
-          <div class="soft-panel">{fit_bands}</div>
+          <div class="soft-panel">{fit_bands}{hint}</div>
           <div>{fit_view}</div>
           <div class="stack">{body}</div></div>"""
 
@@ -1247,28 +1249,29 @@ def _(
         elif ran != POINT_KEY[model]:
             out += empty_state("play", "Ready to run", "Press <strong>Run model fitting</strong> to see the fitted result.")
         else:
-            bayes = bool(fit_bands.value.get("value"))
+            bayes = bool(get_fit_bands())
             out += result(model, BAYES_KEY[model] if bayes else ran, bayes, start, end)
         return f'<div class="stack">{out}</div>'
 
+    _out = None
     if mode in ("early", "partial"):
-        _p = fit_period.value.get("value") or [0, len(obs_times) - 1]
-        _start, _end = (obs_times[_p[0]], obs_times[_p[1]]) if mode == "partial" else (obs_times[0], obs_times[-1])
-        _tab = fit_tabs.value.get("value")
-        _model = fit_model.value.get("value")
-        if _tab == "data":
-            _html = data_tab(_start, _end)
-        elif _tab == "params":
-            _html = params_tab(_model)
+        _ = fit_bands
+        if mode == "partial":
+            _a, _b = fit_period.value
+            _start = day_to_time((_a - DAY0.date()).days)
+            _end = day_to_time((_b - DAY0.date()).days)
         else:
-            _html = fitted_tab(_model, get_fit_ran(), _start, _end)
+            _start, _end = obs_times[0], obs_times[-1]
+        _tab = get_fit_tab()
+        if _tab == "Data and fixed dates":
+            _html = data_tab(_start, _end)
+        elif _tab == "Parameters":
+            _html = params_tab(fit_model.value)
+        else:
+            _html = fitted_tab(fit_model.value, get_fit_ran(), _start, _end)
         _out = page(mode, f'<div style="margin-top:20px">{_html}</div>')
-    else:
-        _out = None
     _out
     return
-
-
 
 
 # =========================================================================
@@ -1295,76 +1298,83 @@ def scenario_window(scn: tuple | None):
     return (day_to_time(SCHOOL_CP), day_to_time(SCHOOL_CP + scn[1]), "School reopening delayed")
 
 
+@app.function
+def day_date(d: int) -> date:
+    return (DAY0 + timedelta(days=int(d))).date()
+
+
 @app.cell(hide_code=True)
 def _():
     # Controls of the scenario mode (kept when switching modes).
-    _models = [("sim_m1", "sim_m1"), ("sim_m2", "sim_m2"), ("age_nocorr", "age_nocorr"), ("age_point", "age_3b")]
-    scn_model_raw, scn_model = widget("radiocards", "sim_m1", options=[
-        dict(value=v, label=MODEL_OPTIONS[c][0], caption=MODEL_OPTIONS[c][2]) for v, c in _models])
-    scn_type_raw, scn_type = widget("segmented", "lockdown", size="sm", full=True, options=[
-        dict(value="baseline", label="Baseline"), dict(value="lockdown", label="Extra lockdown"),
-        dict(value="school", label="Later reopening")])
-    scn_zone_raw, scn_zone = widget("segmented", FREE_ZONES[1][0], size="sm", full=True, options=[
-        dict(value=FREE_ZONES[0][0], label="Before spring"), dict(value=FREE_ZONES[1][0], label="Between lockdowns")])
-    _z = FREE_ZONES[1]
-    scn_start_raw, scn_start = widget("date", iso(day_to_time(_z[1])),
-                                      min=iso(day_to_time(_z[1])), max=iso(day_to_time(_z[2] - 1)))
-    scn_dur_raw, scn_dur = widget("slider", 14, min=1, max=_z[2] - _z[1], fmt="days")
-    scn_red_raw, scn_red = widget("slider", 40, min=5, max=90, step=5, fmt="pct")
-    scn_delay_raw, scn_delay = widget("slider", 21, min=1, max=MAX_SCHOOL_DELAY, fmt="days")
-    scn_period_raw, scn_period = widget("range", [0, N_DAYS - 1], min=0, max=N_DAYS - 1,
-                                        labels=[fmt_date(day_to_time(d)) for d in range(N_DAYS)])
-    _, scn_run = widget("button", label="Run scenario simulation", icon=ICONS["play"], variant="primary", full=True)
-    scn_tab_options = [dict(value="results", label="Results", icon=ICONS["sliders-horizontal"]),
-                       dict(value="compare", label="Compare", icon=ICONS["git-compare-arrows"])]
-    scn_tabs_raw, scn_tabs = widget("tabs", "results", options=scn_tab_options)
-    _, scn_view = widget("segmented", "Plots", options=[dict(value=v, label=v) for v in ("Plots", "Epidemic metrics", "Overlay")])
-    scn_bands_raw, scn_bands = widget("toggle", False, label=f"Show 95% Bayesian band ({N_BAND_DRAWS} posterior draws)")
-    scn_name_raw, scn_name = widget("text", "")
-    _, scn_save = widget("button", label="Save simulation", icon=ICONS["bookmark-plus"])
-    scn_ov_preset, scn_ov_left, scn_ov_right = overlay_widgets()
-    get_scn_config, set_scn_config = mo.state(None)   # the last run: (model, scenario, period)
+    get_scn_config, set_scn_config = mo.state(None)   # the last run: (model, scenario, (first day, last day))
     get_saved, set_saved = mo.state([])                # saved simulations, for Compare
-    return (
-        get_saved, get_scn_config, scn_bands, scn_bands_raw, scn_delay, scn_delay_raw, scn_dur, scn_dur_raw,
-        scn_model, scn_model_raw, scn_name, scn_name_raw, scn_ov_left, scn_ov_preset, scn_ov_right, scn_period,
-        scn_period_raw, scn_red, scn_red_raw, scn_run, scn_save, scn_start, scn_start_raw, scn_tab_options,
-        scn_tabs, scn_tabs_raw, scn_type, scn_type_raw, scn_view, scn_zone, scn_zone_raw, set_saved, set_scn_config,
-    )
+    get_scn_tab, set_scn_tab = mo.state("Results")
+    get_scn_bands, set_scn_bands = mo.state(False)
+    SCN_MODELS = {MODEL_OPTIONS[c][0]: v for v, c in
+                  [("sim_m1", "sim_m1"), ("sim_m2", "sim_m2"), ("age_nocorr", "age_nocorr"), ("age_point", "age_3b")]}
+    scn_model = mo.ui.radio(SCN_MODELS, value="Model 1 — constant")
+    scn_type = mo.ui.radio({"Baseline": "baseline", "Extra lockdown": "lockdown", "Later reopening": "school"},
+                           value="Extra lockdown", inline=True)
+    scn_zone = mo.ui.radio({z[0]: z for z in FREE_ZONES}, value=FREE_ZONES[1][0])
+    scn_red = mo.ui.slider(5, 90, step=5, value=40, show_value=True, full_width=True)
+    scn_delay = mo.ui.slider(1, MAX_SCHOOL_DELAY, value=21, show_value=True, full_width=True)
+    scn_period = mo.ui.date_range(start=day_date(0), stop=day_date(N_DAYS - 1),
+                                  value=(day_date(0), day_date(N_DAYS - 1)), full_width=True)
+    scn_view = mo.ui.radio(["Plots", "Epidemic metrics", "Overlay"], value="Plots", inline=True)
+    scn_ov_preset, scn_ov_left, scn_ov_right = overlay_widgets()
+    return (get_saved, get_scn_bands, get_scn_config, get_scn_tab, scn_delay, scn_model, scn_ov_left, scn_ov_preset,
+            scn_ov_right, scn_period, scn_red, scn_type, scn_view, scn_zone, set_saved, set_scn_bands, set_scn_config,
+            set_scn_tab)
 
 
 @app.cell(hide_code=True)
-def _(scn_start_raw, scn_zone):
-    # A new zone for the extra lockdown: start dates are limited to it.
-    zone = next(z for z in FREE_ZONES if z[0] == scn_zone.value.get("value"))
-    scn_start_raw.props = dict(min=iso(day_to_time(zone[1])), max=iso(day_to_time(zone[2] - 1)))
-    if not zone[1] <= iso_to_day(scn_start_raw.value) < zone[2]:
-        scn_start_raw.value = iso(day_to_time(zone[1]))
-    return (zone,)
+def _(scn_zone):
+    # Start date of the extra lockdown, limited to the chosen zone.
+    zone = scn_zone.value
+    scn_start = mo.ui.date(start=day_date(zone[1]), stop=day_date(zone[2] - 1), value=day_date(zone[1]), full_width=True)
+    return scn_start, zone
 
 
 @app.cell(hide_code=True)
-def _(scn_dur_raw, scn_start, scn_start_raw, zone):
+def _(scn_start, zone):
     # The duration is capped so the window ends before the next real lockdown.
-    _ = scn_start.value
-    start_day = min(max(iso_to_day(scn_start_raw.value), zone[1]), zone[2] - 1)
+    start_day = min(max((scn_start.value - DAY0.date()).days, zone[1]), zone[2] - 1)
     max_dur = zone[2] - start_day
-    scn_dur_raw.props = dict(scn_dur_raw.props, max=max(max_dur, 1))
-    if scn_dur_raw.value > max_dur:
-        scn_dur_raw.value = max(max_dur, 1)
-    return max_dur, start_day
+    scn_dur = mo.ui.slider(1, max_dur, value=min(14, max_dur), show_value=True, full_width=True) if max_dur > 1 else None
+    return max_dur, scn_dur, start_day
 
 
-@app.function
-def current_scenario(type_raw, start_raw, dur_raw, red_raw, delay_raw, zone) -> tuple | None:
-    """The scenario set up in the left column, read from the controls."""
-    kind = type_raw.value
-    if kind == "baseline":
-        return None
-    if kind == "lockdown":
-        start = min(max(iso_to_day(start_raw.value), zone[1]), zone[2] - 1)
-        return ("lockdown", start, max(min(dur_raw.value, zone[2] - start), 1), red_raw.value)
-    return ("school", delay_raw.value)
+@app.cell(hide_code=True)
+def _(
+    scn_delay,
+    scn_dur,
+    scn_model,
+    scn_period,
+    scn_red,
+    scn_type,
+    set_scn_bands,
+    set_scn_config,
+    set_scn_tab,
+    start_day,
+):
+    # "Run scenario simulation": freeze the current set-up as the run to show;
+    # every new run starts without the Bayesian band.
+    def _run(clicks):
+        kind = scn_type.value
+        if kind == "baseline":
+            scn = None
+        elif kind == "lockdown":
+            scn = ("lockdown", start_day, scn_dur.value if scn_dur is not None else 1, scn_red.value)
+        else:
+            scn = ("school", scn_delay.value)
+        a, b = scn_period.value
+        set_scn_config((scn_model.value, scn, ((a - DAY0.date()).days, (b - DAY0.date()).days)))
+        set_scn_bands(False)
+        set_scn_tab("Results")
+        return clicks + 1
+
+    scn_run = mo.ui.button(label="▶  Run scenario simulation", value=0, on_click=_run, kind="success", full_width=True)
+    return (scn_run,)
 
 
 @app.cell(hide_code=True)
@@ -1373,7 +1383,6 @@ def _(
     mode,
     scn_delay,
     scn_dur,
-    scn_dur_raw,
     scn_model,
     scn_period,
     scn_red,
@@ -1385,115 +1394,93 @@ def _(
     zone,
 ):
     # Left column of the scenario mode
+    _out = None
     if mode == "scenarios":
-        _ = scn_dur.value, scn_model.value, scn_red.value, scn_period.value
-        _type = scn_type.value.get("value")
+        _type = scn_type.value
         if _type == "lockdown":
-            _dur = min(scn_dur_raw.value, max_dur)
-            _dur_field = (field(scn_dur.text, "Duration of the Rₜ reduction",
+            _dur = scn_dur.value if scn_dur is not None else 1
+            _dur_field = (field(f"{scn_dur}", "Duration of the Rₜ reduction (days)",
                                 "Capped so the window ends before the next real lockdown. Afterwards it is back to the baseline Rₜ.")
-                          if max_dur > 1 else
+                          if scn_dur is not None else
                           "<p>Only 1 day of room left before the next real lockdown. Pick an earlier start date for a longer window.</p>")
             _extra = f"""<div class="box">
               <p>The two real lockdowns stay as fitted: spring 2020 (<strong>{fmt_date(day_to_time(FITTED_CP[0]))} –
               {fmt_date(day_to_time(FITTED_CP[1]))}</strong>) and the Nov 2020 tightening (from
               <strong>{fmt_date(day_to_time(FITTED_CP[3]))}</strong>). Place the extra lockdown anywhere else, for any duration.</p>
-              {field(scn_zone.text, "When")}
-              {field(scn_start.text, "Extra lockdown start date",
+              {field(f"{scn_zone}", "When")}
+              {field(f"{scn_start}", "Extra lockdown start date",
                      f"Any date between {fmt_date(day_to_time(zone[1]))} and {fmt_date(day_to_time(zone[2] - 1))}.")}
               {_dur_field}
-              {field(scn_red.text, "Rₜ reduction", "Reduction relative to the baseline Rₜ, inside the window.")}
+              {field(f"{scn_red}", "Rₜ reduction (%)", "Reduction relative to the baseline Rₜ, inside the window.")}
               <p class="ink">Rₜ reduced from <strong>{fmt_date(day_to_time(start_day))}</strong> to
               <strong>{fmt_date(day_to_time(min(start_day + _dur, N_DAYS - 1)))}</strong>.</p></div>"""
         elif _type == "school":
-            _delay = scn_delay.value.get("value") or 21
             _extra = f"""<div class="box">
               <p>Schools actually reopened on <strong>{fmt_date(day_to_time(SCHOOL_CP))}</strong>, when β steps up from the
               lower summer level to the higher post-reopening level. Push that switch later, as long as it doesn't reach the
               next real changepoint, the Nov 2020 tightening on <strong>{fmt_date(day_to_time(NEXT_CP))}</strong>.</p>
-              {field(scn_delay.text, "Delay school reopening by")}
+              {field(f"{scn_delay}", "Delay school reopening by (days)")}
               <p class="ink">Reopening moved from <strong>{fmt_date(day_to_time(SCHOOL_CP))}</strong> to
-              <strong>{fmt_date(day_to_time(SCHOOL_CP + _delay))}</strong>.</p></div>"""
+              <strong>{fmt_date(day_to_time(SCHOOL_CP + scn_delay.value))}</strong>.</p></div>"""
         else:
             _extra = '<p class="small">The fitted model as it is, with no counterfactual change.</p>'
-        _body = (f'<div class="stack">{field(scn_model.text, "Model")}{field(scn_type.text, "Scenario")}{_extra}'
-                 f'{field(scn_period.text, "Period to show")}{scn_run}</div>')
+        _body = (f'<div class="stack">{field(f"{scn_model}", "Model")}{field(f"{scn_type}", "Scenario")}{_extra}'
+                 f'{field(f"{scn_period}", "Period to show")}{scn_run}</div>')
         _out = page(mode, card(_body, "Set up a scenario", "Simulated values only, on top of each model's fitted transmission.",
                                "flask-conical", accent=True), "side")
-    else:
-        _out = None
     _out
     return
 
 
 @app.cell(hide_code=True)
-def _(
-    scn_bands_raw,
-    scn_delay_raw,
-    scn_dur_raw,
-    scn_model_raw,
-    scn_name_raw,
-    scn_period_raw,
-    scn_red_raw,
-    scn_run,
-    scn_start_raw,
-    scn_tabs_raw,
-    scn_type_raw,
-    set_scn_config,
-    zone,
-):
-    # "Run scenario simulation": freeze the current set-up as the run to show;
-    # every new run starts without the Bayesian band.
-    if clicked(scn_run):
-        _scn = current_scenario(scn_type_raw, scn_start_raw, scn_dur_raw, scn_red_raw, scn_delay_raw, zone)
-        set_scn_config((scn_model_raw.value, _scn, tuple(scn_period_raw.value)))
-        scn_bands_raw.value = False
-        scn_tabs_raw.value = "results"
-        scn_name_raw.value = scenario_title(scn_model_raw.value, _scn)
-    return
-
-
-@app.cell(hide_code=True)
-def _(get_saved, get_scn_config, scn_name_raw, scn_save, set_saved):
-    # "Save simulation": keep the trajectories of the last run for Compare.
-    if clicked(scn_save) and get_scn_config() is not None:
-        _model, _scn, _period = get_scn_config()
-        _tr = run_scenario(_model, _scn)
-        _base = scn_name_raw.value.strip() or scenario_title(_model, _scn)
-        _names = {s["name"] for s in get_saved()}
-        _final, _k = _base, 2
-        while _final in _names:
-            _final, _k = f"{_base} ({_k})", _k + 1
-        _i0, _i1 = _period[0], _period[1] + 1
-        set_saved(get_saved() + [dict(
-            name=_final, times=[day_to_time(d) for d in range(_i0, _i1)],
-            data={k: v[_i0:_i1] for k, v in _tr.items()})])
-        _toast = mo.status.toast(f"Saved as “{_final}”", "Open Compare to compare it with other saved simulations.")
-    return
-
-
-@app.cell(hide_code=True)
-def _(get_saved, mode, scn_tab_options, scn_tabs, scn_tabs_raw):
-    # Tab bar of the scenario mode, with the number of saved simulations.
+def _(get_saved, get_scn_tab, mode, set_scn_tab):
+    # Tab bar of the scenario mode
+    scn_tabs = mo.ui.tabs({"Results": "", "Compare": ""}, value=get_scn_tab(), on_change=set_scn_tab)
     _n = len(get_saved())
-    scn_tabs_raw.props = {"options": [dict(o, badge=str(_n)) if o["value"] == "compare" and _n else o
-                                      for o in scn_tab_options]}
-    page(mode, f"{scn_tabs}") if mode == "scenarios" else None
+    _badge = f'<span class="tab-note">{_n} saved simulation{"s" if _n != 1 else ""}</span>' if _n else ""
+    page(mode, f"{scn_tabs}{_badge}") if mode == "scenarios" else None
     return
 
 
 @app.cell(hide_code=True)
+def _(get_saved, get_scn_bands, get_scn_config, set_saved, set_scn_bands):
+    # Controls shown with a result: its name, Save, and the band switch.
+    _config = get_scn_config()
+    _available = _config is not None and _config[0] == "age_point" and _config[1] is None
+    scn_name = mo.ui.text(value=scenario_title(*_config[:2]) if _config else "", full_width=True)
+    scn_bands = mo.ui.switch(value=get_scn_bands() and _available, disabled=not _available, on_change=set_scn_bands,
+                             label=f"**Show 95% Bayesian band ({N_BAND_DRAWS} posterior draws)**")
+
+    def _save(clicks):
+        model, scn, period = get_scn_config()
+        tr = run_scenario(model, scn)
+        base = scn_name.value.strip() or scenario_title(model, scn)
+        names = {s["name"] for s in get_saved()}
+        final, k = base, 2
+        while final in names:
+            final, k = f"{base} ({k})", k + 1
+        i0, i1 = period[0], period[1] + 1
+        item = dict(name=final, times=[day_to_time(d) for d in range(i0, i1)], data={k_: v[i0:i1] for k_, v in tr.items()})
+        set_saved(lambda saved: saved + [item])
+        mo.status.toast(f"Saved as “{final}”", "Open Compare to compare it with other saved simulations.")
+        return clicks + 1
+
+    scn_save = mo.ui.button(label="Save simulation", value=0, on_click=_save)
+    return scn_bands, scn_name, scn_save
+
+
+@app.cell(hide_code=True)
 def _(
+    get_scn_bands,
     get_scn_config,
+    get_scn_tab,
     mode,
     scn_bands,
-    scn_bands_raw,
     scn_name,
     scn_ov_left,
     scn_ov_preset,
     scn_ov_right,
     scn_save,
-    scn_tabs,
     scn_view,
 ):
     # Results of the last scenario run
@@ -1507,11 +1494,7 @@ def _(
         inp = load("sim_inputs")[model]
         b4, b5 = inp["betas"][3], inp["betas"][4]
         bands_available = model == "age_point" and scn is None
-        scn_bands_raw.props = dict(
-            label=f"Show 95% Bayesian band ({N_BAND_DRAWS} posterior draws)", disabled=not bands_available,
-            hint=("Integrates 500 posterior draws of Model 3b and adds the fitted observation noise, corrected for residual autocorrelation."
-                  if bands_available else "Available for the Model 3b baseline (no counterfactual scenario)."))
-        bands = baseline_bands() if bands_available and scn_bands.value.get("value") else None
+        bands = baseline_bands() if bands_available and get_scn_bands() else None
         metrics = compute_metrics(times, tr, times, tr["Rt"], start, end)
 
         def panel(s):
@@ -1522,7 +1505,7 @@ def _(
             return time_panel(times, layers, start, end, None if s == "Rt" else SERIES_SHORT[s], window=window,
                               rt_line=s == "Rt", y_digits=1 if s == "Rt" else None, y_title="Rₜ" if s == "Rt" else None)
 
-        view = scn_view.value.get("value")
+        view = scn_view.value
         if view == "Plots":
             leg = [("line", CT["muted"], "Scenario" if scn else "Simulated (fitted baseline)")]
             if bands:
@@ -1531,7 +1514,7 @@ def _(
                 leg.append(("window", CT["window"], f"Window where it differs ({window[2]})"))
             leg.append(("rule", CT["rule"], "Fitted changepoint"))
             body = (legend(leg) + panel_grid([chart_card(chart(panel(s), 250), COLORS[s]) for s in SERIES])
-                    + card(chart(panel("Rt"), 260).text, "Effective reproduction number Rₜ"))
+                    + card(chart(panel("Rt"), 260), "Effective reproduction number Rₜ"))
         elif view == "Epidemic metrics":
             body = metrics_view(metrics)
         else:
@@ -1542,18 +1525,21 @@ def _(
                         f'{chart(overlay_chart(start, end, side(a), side(b), window), 360)}</div>', "Overlay",
                         "Compare two simulated series on the same time axis, each with its own y-axis, so that their "
                         "different scales do not matter.")
+        band_hint = ("Integrates 500 posterior draws of Model 3b and adds the fitted observation noise, corrected for residual "
+                     "autocorrelation." if bands_available else "Available for the Model 3b baseline (no counterfactual scenario).")
         return f"""<div class="stack">
           <div><div class="result-head"><h2>{title}</h2></div>
           <p class="small" style="font-size:13px;margin-top:4px">Period: {fmt_date(start)} – {fmt_date(end)}. Only simulated values
           are shown. For reference, the fitted switch on 06/11/2020 already reduces β by {100 * (1 - b5 / b4):.0f}% in this model
           (β₄ = {b4:.4f} → β₅ = {b5:.4f}).</p></div>
           <div class="soft-panel" style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px">
-            <div style="flex:1;min-width:220px">{field(scn_name.text, "Name for this simulation")}</div>{scn_save}</div>
-          <div class="soft-panel">{scn_bands}</div>
+            <div style="flex:1;min-width:220px">{field(f"{scn_name}", "Name for this simulation")}</div>{scn_save}</div>
+          <div class="soft-panel">{scn_bands}<span class="hint-under">{band_hint}</span></div>
           <div>{scn_view}</div>
           <div class="stack">{body}</div></div>"""
 
-    if mode == "scenarios" and scn_tabs.value.get("value") == "results":
+    _out = None
+    if mode == "scenarios" and get_scn_tab() == "Results":
         _config = get_scn_config()
         if _config is None:
             _html = empty_state("arrow-left", "Set up a scenario",
@@ -1563,43 +1549,38 @@ def _(
         else:
             _html = results(_config)
         _out = page(mode, f'<div style="margin-top:20px">{_html}</div>')
-    else:
-        _out = None
     _out
     return
 
 
 @app.cell(hide_code=True)
-def _(get_saved):
+def _(get_saved, set_saved):
     # Compare: which saved simulations, which series, and removing them.
     _names = [s["name"] for s in get_saved()]
-    _, cmp_chosen = widget("checklist", _names, options=_names)
-    _, cmp_series = widget("segmented", "cases", size="sm",
-                           options=[dict(value=s, label=SERIES_SHORT[s]) for s in (*SERIES, "Rt")])
-    _, cmp_drop = widget("checklist", [], options=_names)
-    _, cmp_remove = widget("button", label="Remove selected", icon=ICONS["trash-2"], size="sm")
+    cmp_chosen = mo.ui.multiselect(_names, value=_names, full_width=True)
+    cmp_series = mo.ui.radio({SERIES_SHORT[s]: s for s in (*SERIES, "Rt")}, value="Daily cases", inline=True)
+    cmp_drop = mo.ui.multiselect(_names, full_width=True)
+
+    def _remove(clicks):
+        drop = set(cmp_drop.value)
+        if drop:
+            set_saved(lambda saved: [s for s in saved if s["name"] not in drop])
+        return clicks + 1
+
+    cmp_remove = mo.ui.button(label="Remove selected", value=0, on_click=_remove, kind="danger")
     return cmp_chosen, cmp_drop, cmp_remove, cmp_series
 
 
 @app.cell(hide_code=True)
-def _(cmp_drop, cmp_remove, get_saved, set_saved):
-    if clicked(cmp_remove):
-        _drop = set(cmp_drop.value.get("value") or [])
-        if _drop:
-            set_saved([s for s in get_saved() if s["name"] not in _drop])
-    return
-
-
-@app.cell(hide_code=True)
-def _(cmp_chosen, cmp_drop, cmp_remove, cmp_series, get_saved, mode, scn_tabs):
+def _(cmp_chosen, cmp_drop, cmp_remove, cmp_series, get_saved, get_scn_tab, mode):
     def compare(saved):
         if not saved:
             return empty_state("bookmark", "No saved simulations yet",
                                "Run a scenario in <strong>Results</strong>, press <strong>Save simulation</strong>, and repeat "
                                "for the scenarios you want to compare. Saved simulations stay while this page is open.")
-        chosen = cmp_chosen.value.get("value") or []
+        chosen = cmp_chosen.value
         items = [s for s in saved if s["name"] in chosen]
-        series = cmp_series.value.get("value")
+        series = cmp_series.value
         is_rt = series == "Rt"
         label = SERIES_SHORT[series]
         out = card(f'<div class="stack-sm">{cmp_chosen}{cmp_series}</div>', "Saved simulations",
@@ -1625,24 +1606,23 @@ def _(cmp_chosen, cmp_drop, cmp_remove, cmp_series, get_saved, mode, scn_tabs):
                                  peak=fmt_num(peak[0], 2) if is_rt else fmt_int(peak[0]), day=fmt_date(peak[1])))
             csv_rows = [[iso(t), *[round(s["data"][k][i], 4) for k in SERIES], round(s["data"]["Rt"][i], 5), s["name"]]
                         for s in items for i, t in enumerate(s["times"])]
-            _, dl_csv = widget("download", label="Trajectories (CSV)", icon=ICONS["download"],
-                               files={"saved_scenarios.csv": to_csv(["date", *SERIES, "Rt", "simulation"], csv_rows)})
-            _, dl_png = widget("download", label="Comparison plot (PNG)", icon=ICONS["image"],
-                               images=[dict(name=f"compare_{series}.png", figures=[fig], height=380 + 20 * len(items),
-                                            title=f"{label} — saved simulations")])
+            dl_csv = mo.download(data=to_csv(["date", *SERIES, "Rt", "simulation"], csv_rows).encode(),
+                                 filename="saved_scenarios.csv", label="Trajectories (CSV)")
+            dl_plot = mo.download(data=lambda: figures_html(f"{label} — saved simulations", [fig]).encode(),
+                                  filename=f"compare_{series}.html", label="Comparison plot (HTML)")
             out += f"""{chart_card(chart(fig, 380 + 20 * len(items)))}
               <div><h4 class="sec">Summary <span class="muted" style="font-weight:400">(differences relative to
               <strong>{items[0]["name"]}</strong>)</span></h4>
               {table([("name", "Simulation", "b"), ("period", "Period", "nw soft"), ("cases", "Total cases", "r"), ("dc", "vs first", "r"),
                       ("deaths", "Total deaths", "r"), ("dd", "vs first", "r"),
                       ("peak", "Highest Rₜ" if is_rt else f"Peak {label}", "r"), ("day", "Peak day", "r")], rows)}</div>
-              <div style="display:flex;flex-wrap:wrap;gap:8px">{dl_csv}{dl_png}</div>"""
+              <div style="display:flex;flex-wrap:wrap;gap:8px">{dl_csv}{dl_plot}</div>"""
         out += f"""<details class="exp"><summary><span class="ic">{icon("trash-2")}</span>Manage saved simulations
           <span class="chev">{icon("chevron-down")}</span></summary><div class="in stack-sm">{cmp_drop}{cmp_remove}</div></details>"""
         return f'<div class="stack">{out}</div>'
 
     _out = None
-    if mode == "scenarios" and scn_tabs.value.get("value") == "compare":
+    if mode == "scenarios" and get_scn_tab() == "Compare":
         _out = page(mode, f'<div style="margin-top:20px">{compare(get_saved())}</div>')
     _out
     return
@@ -1655,7 +1635,7 @@ def _(cmp_chosen, cmp_drop, cmp_remove, cmp_series, get_saved, mode, scn_tabs):
 def _(mode):
     _out = None
     if mode == "vaccination":
-        _out = mo.Html(f'<div data-mode="vaccination">' + empty_state(
+        _out = mo.Html('<div data-mode="vaccination">' + empty_state(
             "syringe", "Model with vaccination — coming soon",
             "<p style='margin:0'>This mode is not available yet. It will extend one of the calibrated models (most likely Model 3b) "
             "with vaccination, for later stages of the pandemic. Meanwhile, explore the fitted models (modes 1 and 2) or the "

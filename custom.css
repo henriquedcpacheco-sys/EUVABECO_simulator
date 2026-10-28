@@ -200,3 +200,48 @@ h4.sec { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: var(--eu-tex
   padding: 20px 24px; font-size: 12.5px; color: var(--eu-muted); }
 .page-end { height: 64px; }
 [data-testid="watermark"] { display: none !important; }
+
+/* ---------------------------------------------------------------------------
+   Top bar and dialogs. A dialog is a <details> element: when it is open, its
+   <summary> also covers the whole screen as the dark backdrop, so a click
+   outside the dialog closes it.
+--------------------------------------------------------------------------- */
+.modal-back { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: flex-start; justify-content: center; overflow-y: auto;
+  background: rgba(0,0,0,.45); padding: 32px; backdrop-filter: blur(2px); }
+.modal { width: 100%; max-width: 672px; border-radius: 16px; border: 1px solid var(--eu-border); background: var(--eu-surface); box-shadow: var(--eu-shadow-lg);
+  animation: fade-in .22s ease-out both; color: var(--eu-text); }
+.modal.wide { max-width: 1024px; }
+.modal-head { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--eu-border); padding: 16px 24px; }
+.modal-head h2 { margin: 0; font-size: 17px; font-weight: 600; }
+.modal-body { padding: 20px 24px; font-size: 14.5px; color: var(--eu-text-2); }
+.modal-body p { margin: 0 0 .6rem; line-height: 1.6; }
+.modal-body a { color: var(--eu-primary); }
+.modal-body img { width: 100%; border-radius: 8px; border: 1px solid var(--eu-border); background: #fff; margin-bottom: 16px; }
+.icon-btn { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; color: var(--eu-muted); }
+.icon-btn:hover { background: var(--eu-surface-2); color: var(--eu-text); }
+@keyframes fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* ---- Top bar ------------------------------------------------------------- */
+.topbar { border-bottom: 1px solid var(--eu-border); background: color-mix(in oklab, var(--eu-surface) 88%, transparent); }
+.hero-line { height: 3px; background: var(--eu-hero); }
+.topbar-in { margin: 0 auto; display: flex; height: 56px; max-width: 1440px; align-items: center; gap: 12px; padding: 0 24px; }
+.logo { width: 28px; height: 28px; }
+.brand { min-width: 0; line-height: 1.25; }
+.brand .name { font-size: 14.5px; font-weight: 600; color: var(--eu-text); }
+.brand .sub { font-size: 11.5px; color: var(--eu-muted); }
+.topbar nav { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+.top-btn { display: inline-flex; height: 36px; align-items: center; gap: 8px; border-radius: 8px; padding: 0 12px; font-size: 13.5px; font-weight: 500;
+  color: var(--eu-text-2); text-decoration: none; }
+.top-btn.square { width: 36px; justify-content: center; padding: 0; }
+.top-btn:hover { background: var(--eu-surface-2); color: var(--eu-text); }
+@media (max-width: 640px) { .top-btn span, .brand .sub { display: none; } .top-btn.pdf { display: none; } }
+details.dlg > summary { list-style: none; cursor: pointer; }
+details.dlg > summary::-webkit-details-marker { display: none; }
+details.dlg[open] > summary::before { content: ""; position: fixed; inset: 0; z-index: 999; background: rgba(0,0,0,.45); backdrop-filter: blur(2px); cursor: default; }
+details.dlg .modal-back { background: none; backdrop-filter: none; pointer-events: none; }
+details.dlg .modal { pointer-events: auto; text-align: left; white-space: normal; }
+.close-hint { font-size: 12.5px; color: var(--eu-muted); font-weight: 400; }
+.topbar a { text-decoration: none; }
+.top-btn svg, .icon-btn svg { flex-shrink: 0; }
+.hint-under { display: block; margin: 4px 0 0 0; font-size: 12.5px; line-height: 1.4; color: var(--eu-muted); }
+.tab-note { display: inline-block; margin-top: 6px; font-size: 12.5px; color: var(--eu-muted); }
