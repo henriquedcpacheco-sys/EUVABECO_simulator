@@ -249,3 +249,8 @@ details.dlg .modal { pointer-events: auto; text-align: left; white-space: normal
 .top-btn svg, .icon-btn svg { flex-shrink: 0; }
 .hint-under { display: block; margin: 4px 0 0 0; font-size: 12.5px; line-height: 1.4; color: var(--eu-muted); }
 .tab-note { display: inline-block; margin-top: 6px; font-size: 12.5px; color: var(--eu-muted); }
+
+/* The mode tabs overlap the bottom of the hero: keep their cell on top, even
+   when marimo raises a hovered cell. */
+#App .marimo-cell:has(.hero) { z-index: 1 !important; }
+#App .marimo-cell:has(.modes-wrap) { z-index: 30 !important; }
