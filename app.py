@@ -865,7 +865,8 @@ def _():
     def _mode_label(m):
         color = MODE_COLORS[m["value"]]
         soon = " · soon" if m.get("soon") else ""
-        return (f'<div title="{m["caption"]}" style="display:flex;align-items:center;gap:10px;text-align:left;padding:2px 6px">'
+        return (f'<div title="{m["caption"]}" style="display:flex;align-items:center;gap:10px;text-align:left;padding:2px 6px;'
+                f'width:calc((min(100vw, 1440px) - 150px) / 4 / 1.15)">'
                 f'<span style="display:grid;place-items:center;width:30px;height:30px;flex-shrink:0;border-radius:8px;'
                 f'background:{color};color:#06121d">{icon(ICON_OF_MODE[m["value"]], 17)}</span>'
                 f'<span style="line-height:1.15"><span style="display:block;font-size:11px;font-weight:600;color:{color}">'
@@ -942,7 +943,7 @@ def _(fit_model, fit_period, fit_run, mode):
         _captions = "".join(f"<li><strong>{v[1]}</strong>: {v[2]}</li>" for v in MODEL_OPTIONS.values())
         _hint = ('The models differ in how the hospitalisation probability ψ is constructed:'
                  f'<ul style="margin:4px 0 0;padding-left:1.1rem">{_captions}</ul>')
-        _body = f'<div class="stack">{_period}{field(f"{fit_model}", "Model", _hint)}{fit_run}</div>'
+        _body = f'<div class="stack">{_period}{field(f"{fit_model}", "Model", _hint)}<div class="run-wrap">{fit_run}</div></div>'
         _sub = "Choose the period and a model." if mode == "partial" else "Whole of 2020. Choose a model."
         _out = page(mode, card(_body, "Set up the fit", _sub, "sliders-horizontal", accent=True), "side")
     _out
@@ -1437,7 +1438,7 @@ def _(
         else:
             _extra = '<p class="small">The fitted model as it is, with no counterfactual change.</p>'
         _body = (f'<div class="stack">{field(f"{scn_model}", "Model")}{field(f"{scn_type}", "Scenario")}{_extra}'
-                 f'{field(f"{scn_period}", "Period to show")}{scn_run}</div>')
+                 f'{field(f"{scn_period}", "Period to show")}<div class="run-wrap">{scn_run}</div></div>')
         _out = page(mode, card(_body, "Set up a scenario", "Simulated values only, on top of each model's fitted transmission.",
                                "flask-conical", accent=True), "side")
     _out
