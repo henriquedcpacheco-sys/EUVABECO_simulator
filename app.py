@@ -122,6 +122,15 @@ with app.setup:
         "age_nocorr": ("Model 3a — age-stratified ψ", "Model 3a", "Without testing-volume coupling"),
         "age_3b": ("Model 3b — age-stratified ψ", "Model 3b", "With testing-volume coupling"),
     }
+    def model_label(name: str, caption: str) -> str:
+        """A model choice: its name with its caption underneath (inline styles:
+        the list is drawn by marimo, out of reach of custom.css)."""
+        return (f'<div style="text-align:left;white-space:normal;line-height:1.3;padding:3px 2px;width:285px">'
+                f'<div style="font-size:13.5px;font-weight:500">{name}</div>'
+                f'<div style="font-size:12.5px;opacity:.65">{caption}</div></div>')
+
+    # model picker label -> model key, as used by the fit modes
+    MODEL_BY_LABEL = {model_label(v[0], v[2]): k for k, v in MODEL_OPTIONS.items()}
     POINT_KEY = {"sim_m1": "sim_m1", "sim_m2": "sim_m2", "age_nocorr": "age_nocorr", "age_3b": "age_point"}
     BAYES_KEY = {"sim_m1": "sim_m1_bayes", "sim_m2": "sim_m2_bayes",
                  "age_nocorr": "age_nocorr_bayes", "age_3b": "age_bayes"}
@@ -903,14 +912,14 @@ def _(mode):
     get_fit_tab, set_fit_tab = mo.state("Data and fixed dates")     # open tab
     get_fit_bands, set_fit_bands = mo.state(False)                  # Bayesian bands on/off
 
-    fit_model = mo.ui.radio({v[0]: k for k, v in MODEL_OPTIONS.items()})
+    fit_model = mo.ui.tabs({k: "" for k in MODEL_BY_LABEL}, orientation="vertical")
     _first, _last = (datetime.fromtimestamp(t / 1000, tz=timezone.utc).date() for t in (obs_times[0], obs_times[-1]))
     fit_period = mo.ui.date_range(start=_first, stop=_last, value=(_first, _last), full_width=True)
 
     def _run(clicks):
         # Always the least-squares fit first, bands off, Fitted model tab open.
         if fit_model.value:
-            set_fit_ran(POINT_KEY[fit_model.value])
+            set_fit_ran(POINT_KEY[MODEL_BY_LABEL[fit_model.value]])
             set_fit_bands(False)
             set_fit_tab("Fitted model")
         return clicks + 1
@@ -940,9 +949,7 @@ def _(fit_model, fit_period, fit_run, mode):
         if mode == "partial":
             _period = field(f"{fit_period}", "Period to display",
                             "All models were fitted on the whole of 2020. This selects the window shown in every plot.")
-        _captions = "".join(f"<li><strong>{v[1]}</strong>: {v[2]}</li>" for v in MODEL_OPTIONS.values())
-        _hint = ('The models differ in how the hospitalisation probability ψ is constructed:'
-                 f'<ul style="margin:4px 0 0;padding-left:1.1rem">{_captions}</ul>')
+        _hint = "The models differ in how the hospitalisation probability ψ is constructed."
         _body = f'<div class="stack">{_period}{field(f"{fit_model}", "Model", _hint)}<div class="run-wrap">{fit_run}</div></div>'
         _sub = "Choose the period and a model." if mode == "partial" else "Whole of 2020. Choose a model."
         _out = page(mode, card(_body, "Set up the fit", _sub, "sliders-horizontal", accent=True), "side")
@@ -1260,7 +1267,8 @@ def _(
                                "Choose one of the four models, then press <strong>Run model fitting</strong>. The table below "
                                "compares the fit error J of every model.") + models_at_a_glance()
         elif ran != POINT_KEY[model]:
-            out += empty_state("play", "Ready to run", "Press <strong>Run model fitting</strong> to see the fitted result.")
+            out += empty_state("play", "Ready to run", "Press <strong>Run model fitting</strong> to see the fitted result. "
+                               "The table below compares the fit error J of every model.") + models_at_a_glance()
         else:
             bayes = bool(get_fit_bands())
             out += result(model, BAYES_KEY[model] if bayes else ran, bayes, start, end)
@@ -1279,9 +1287,9 @@ def _(
         if _tab == "Data and fixed dates":
             _html = data_tab(_start, _end)
         elif _tab == "Parameters":
-            _html = params_tab(fit_model.value)
+            _html = params_tab(MODEL_BY_LABEL.get(fit_model.value))
         else:
-            _html = fitted_tab(fit_model.value, get_fit_ran(), _start, _end)
+            _html = fitted_tab(MODEL_BY_LABEL.get(fit_model.value), get_fit_ran(), _start, _end)
         _out = page(mode, f'<div style="margin-top:20px">{_html}</div>')
     _out
     return
@@ -1323,9 +1331,9 @@ def _():
     get_saved, set_saved = mo.state([])                # saved simulations, for Compare
     get_scn_tab, set_scn_tab = mo.state("Results")
     get_scn_bands, set_scn_bands = mo.state(False)
-    SCN_MODELS = {MODEL_OPTIONS[c][0]: v for v, c in
+    SCN_MODELS = {model_label(MODEL_OPTIONS[c][0], MODEL_OPTIONS[c][2]): v for v, c in
                   [("sim_m1", "sim_m1"), ("sim_m2", "sim_m2"), ("age_nocorr", "age_nocorr"), ("age_point", "age_3b")]}
-    scn_model = mo.ui.radio(SCN_MODELS, value="Model 1 — constant")
+    scn_model = mo.ui.tabs({k: "" for k in SCN_MODELS}, orientation="vertical")
     scn_type = mo.ui.radio({"Baseline": "baseline", "Extra lockdown": "lockdown", "Later reopening": "school"},
                            value="Extra lockdown", inline=True)
     scn_zone = mo.ui.radio({z[0]: z for z in FREE_ZONES}, value=FREE_ZONES[1][0])
@@ -1335,7 +1343,7 @@ def _():
                                   value=(day_date(0), day_date(N_DAYS - 1)), full_width=True)
     scn_view = mo.ui.radio(["Plots", "Epidemic metrics", "Overlay"], value="Plots", inline=True)
     scn_ov_preset, scn_ov_left, scn_ov_right = overlay_widgets()
-    return (get_saved, get_scn_bands, get_scn_config, get_scn_tab, scn_delay, scn_model, scn_ov_left, scn_ov_preset,
+    return (SCN_MODELS, get_saved, get_scn_bands, get_scn_config, get_scn_tab, scn_delay, scn_model, scn_ov_left, scn_ov_preset,
             scn_ov_right, scn_period, scn_red, scn_type, scn_view, scn_zone, set_saved, set_scn_bands, set_scn_config,
             set_scn_tab)
 
@@ -1359,6 +1367,7 @@ def _(scn_start, zone):
 
 @app.cell(hide_code=True)
 def _(
+    SCN_MODELS,
     scn_delay,
     scn_dur,
     scn_model,
@@ -1381,7 +1390,7 @@ def _(
         else:
             scn = ("school", scn_delay.value)
         a, b = scn_period.value
-        set_scn_config((scn_model.value, scn, ((a - DAY0.date()).days, (b - DAY0.date()).days)))
+        set_scn_config((SCN_MODELS[scn_model.value], scn, ((a - DAY0.date()).days, (b - DAY0.date()).days)))
         set_scn_bands(False)
         set_scn_tab("Results")
         return clicks + 1
