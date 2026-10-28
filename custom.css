@@ -3,28 +3,29 @@
 @import url("https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.1.0/index.css");
 
 :root {
-  --eu-bg: #f4f6f9;
-  --eu-surface: #ffffff;
-  --eu-surface-2: #f1f4f8;
-  --eu-surface-3: #e7ecf2;
-  --eu-border: #e1e6ed;
-  --eu-border-strong: #cbd3de;
-  --eu-text: #172033;
-  --eu-text-2: #475266;
-  --eu-muted: #6b7587;
-  --eu-primary: #0e6ba8;
-  --eu-primary-soft: #e3f0f9;
-  --eu-accent: #e4572e;
-  --eu-warn-soft: #fff6e0;
-  --eu-warn-ink: #7a5300;
-  --eu-shadow: 0 1px 2px rgba(16, 24, 40, .05), 0 1px 3px rgba(16, 24, 40, .06);
-  --eu-shadow-lg: 0 12px 32px -8px rgba(16, 24, 40, .22);
-  --eu-mode-early: #0e6ba8;   --eu-mode-early-soft: #e2effa;
-  --eu-mode-partial: #0b7f71; --eu-mode-partial-soft: #dcf2ee;
-  --eu-mode-scenarios: #c2461f; --eu-mode-scenarios-soft: #fde8e0;
-  --eu-mode-vaccination: #6f4a8e; --eu-mode-vaccination-soft: #efe6f6;
-  --eu-hero: linear-gradient(120deg, #0b2545 0%, #0e5e98 48%, #0f8f80 100%);
-  color-scheme: light;
+  /* dark mode */
+  --eu-bg: #0c1118;
+  --eu-surface: #131a23;
+  --eu-surface-2: #19212c;
+  --eu-surface-3: #212b38;
+  --eu-border: #253041;
+  --eu-border-strong: #34425a;
+  --eu-text: #e6eaf0;
+  --eu-text-2: #b3bccb;
+  --eu-muted: #8b95a6;
+  --eu-primary: #4ea8e3;
+  --eu-primary-soft: #14304a;
+  --eu-accent: #f07a55;
+  --eu-warn-soft: #33290f;
+  --eu-warn-ink: #f2cf7a;
+  --eu-shadow: 0 1px 2px rgba(0, 0, 0, .4);
+  --eu-shadow-lg: 0 12px 32px -8px rgba(0, 0, 0, .6);
+  --eu-mode-early: #4ea8e3;   --eu-mode-early-soft: #12304a;
+  --eu-mode-partial: #34c3ad; --eu-mode-partial-soft: #0f3330;
+  --eu-mode-scenarios: #f2865f; --eu-mode-scenarios-soft: #3b2117;
+  --eu-mode-vaccination: #b591d6; --eu-mode-vaccination-soft: #2c2140;
+  --eu-hero: linear-gradient(120deg, #081a31 0%, #0c4a7a 50%, #0b6b61 100%);
+  color-scheme: dark;
 }
 [data-mode="early"]       { --eu-primary: var(--eu-mode-early);       --eu-primary-soft: var(--eu-mode-early-soft); }
 [data-mode="partial"]     { --eu-primary: var(--eu-mode-partial);     --eu-primary-soft: var(--eu-mode-partial-soft); }
@@ -32,8 +33,8 @@
 [data-mode="vaccination"] { --eu-primary: var(--eu-mode-vaccination); --eu-primary-soft: var(--eu-mode-vaccination-soft); }
 
 html, body, #App, #root {
-  background: radial-gradient(1100px 480px at 8% -8%, rgba(14, 107, 168, .13), transparent 70%),
-              radial-gradient(900px 420px at 100% -4%, rgba(15, 143, 128, .11), transparent 70%), var(--eu-bg) !important;
+  background: radial-gradient(1100px 480px at 8% -8%, rgba(78, 168, 227, .12), transparent 70%),
+              radial-gradient(900px 420px at 100% -4%, rgba(52, 195, 173, .09), transparent 70%), var(--eu-bg) !important;
   background-attachment: fixed !important;
   color: var(--eu-text);
 }
@@ -191,7 +192,7 @@ details.exp > .in { border-top: 1px solid var(--eu-border); padding: 16px 20px; 
 .formula { overflow-x: auto; border-radius: 8px; background: var(--eu-surface-2); padding: 4px 16px; }
 h3.sec { margin: 0; padding-top: 8px; font-size: 15px; font-weight: 600; color: var(--eu-text); }
 h4.sec { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: var(--eu-text); }
-.pos { color: #0f8a5f; } .neg { color: var(--eu-accent); }
+.pos { color: #3ccf95; } .neg { color: var(--eu-accent); }
 
 /* Footer */
 .footer { margin-top: 16px; border-top: 1px solid var(--eu-border); background: var(--eu-surface); }

@@ -1,0 +1,3 @@
+[tool.marimo.display]
+# The app is shown in dark mode.
+theme = "dark"

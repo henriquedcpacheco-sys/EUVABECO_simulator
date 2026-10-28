@@ -71,17 +71,18 @@ with app.setup:
                      "icu": "ICU occupancy", "deaths": "Daily deaths"}
     SERIES_SHORT = {"cases": "Daily cases", "ward": "General ward", "icu": "ICU",
                     "deaths": "Daily deaths", "Rt": "Rₜ"}
-    # Okabe-Ito based, readable for colour-blind viewers; DEEP for a model
-    # line drawn over its own bands.
-    COLORS = {"cases": "#0072B2", "ward": "#E69F00", "icu": "#CC79A7",
-              "deaths": "#D55E00", "Rt": "#009E73"}
-    DEEP = {"cases": "#004C7A", "ward": "#9A6800", "icu": "#8C3F6E",
-            "deaths": "#8F3D00", "Rt": "#006B4E"}
-    COMPARE_PALETTE = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#D55E00",
-                       "#56B4E9", "#7A5195", "#8A8F98"]
-    # chart colours
-    CT = dict(text="#172033", muted="#6b7587", grid="#eceff3", axis="#c5ccd6",
-              rule="#7a808a", obs="#8a8f98", window="#e4572e", border="#e1e6ed")
+    # The page is in dark mode. Series colours: Okabe-Ito based (readable for
+    # colour-blind viewers), lightened to stand out on a dark background;
+    # DEEP is the model line drawn over its own bands.
+    COLORS = {"cases": "#56B4E9", "ward": "#F0B23A", "icu": "#D98FBA",
+              "deaths": "#F07A3A", "Rt": "#2EC497"}
+    DEEP = {"cases": "#9AD3F5", "ward": "#F7CF7A", "icu": "#EBB8D5",
+            "deaths": "#F7A97E", "Rt": "#7BE0BF"}
+    COMPARE_PALETTE = ["#56B4E9", "#F0B23A", "#2EC497", "#D98FBA", "#F07A3A",
+                       "#A5B4FC", "#C4A3E0", "#AAB0BA"]
+    # chart colours (dark mode)
+    CT = dict(text="#e6eaf0", muted="#8b95a6", grid="#222c39", axis="#3a4658",
+              rule="#7d889a", obs="#9aa3b2", window="#f07a55", border="#34425a", tooltip="#1b2430")
     FONT = "Inter Variable, system-ui, sans-serif"
 
     DAY0 = datetime(2020, 3, 1, tzinfo=timezone.utc)   # day 0 of the simulator
@@ -145,13 +146,14 @@ with app.setup:
         "<strong>F_test</strong>, how fast the testing-volume coupling Ch(t) pulls ψ down as testing increases.",
     }
 
+    MODE_COLORS = {"early": "#4ea8e3", "partial": "#34c3ad", "scenarios": "#f2865f", "vaccination": "#b591d6"}
+    ICON_OF_MODE = {"early": "activity", "partial": "waypoints", "scenarios": "flask-conical", "vaccination": "syringe"}
     MODES = [
         dict(value="early", n=1, title="Estimate early dynamics", caption="Whole of 2020, fixed time period", icon=ICONS["activity"]),
         dict(value="partial", n=2, title="Estimate partial early dynamics", caption="Choose the time period", icon=ICONS["waypoints"]),
         dict(value="scenarios", n=3, title="Transmission scenarios", caption="Extra lockdown or later school reopening", icon=ICONS["flask-conical"]),
         dict(value="vaccination", n=4, title="Model with vaccination", caption="Not available yet", icon=ICONS["syringe"], soon=True),
     ]
-    REPO_URL = "https://github.com/henriquedcpacheco-sys/EUVABECO_simulator"
     ZOOM_HINT = "Drag to move along the time axis; the toolbar at the top right of a plot zooms, resets, or saves it as PNG. Double-click to reset."
     # Plotly toolbar shown when hovering a chart
     PLOT_CONFIG = {"displaylogo": False, "scrollZoom": False, "doubleClick": "reset",
@@ -422,9 +424,9 @@ def base_layout(title: str | None = None, top: int | None = None) -> dict:
                    font=dict(size=13, color=CT["text"], weight=600)) if title else None,
         showlegend=False,
         hovermode="x unified",
-        hoverlabel=dict(bgcolor="#ffffff", bordercolor=CT["border"], font=dict(family=FONT, size=12, color=CT["text"])),
+        hoverlabel=dict(bgcolor=CT["tooltip"], bordercolor=CT["border"], font=dict(family=FONT, size=12, color=CT["text"])),
         dragmode="pan",
-        modebar=dict(bgcolor="rgba(255,255,255,0.85)", color=CT["muted"], activecolor=CT["text"]),
+        modebar=dict(bgcolor="rgba(19,26,35,0.85)", color=CT["muted"], activecolor=CT["text"]),
     )
 
 
@@ -770,7 +772,7 @@ def figures_html(title: str, figures: list) -> str:
     parts = [go.Figure(f).update_layout(height=360).to_html(full_html=False, include_plotlyjs="cdn" if i == 0 else False)
              for i, f in enumerate(figures)]
     return (f'<!doctype html><html><head><meta charset="utf-8"><title>{title}</title></head>'
-            f'<body style="font-family:system-ui,sans-serif;max-width:1100px;margin:24px auto"><h2>{title}</h2>'
+            f'<body style="font-family:system-ui,sans-serif;max-width:1100px;margin:24px auto;background:#0c1118;color:#e6eaf0"><h2>{title}</h2>'
             + "".join(parts) + "</body></html>")
 
 
@@ -826,7 +828,6 @@ def _():
         {_dialog(f'{icon("info")}<span>About</span>', "Welcome to the Online COVID-19 Simulator", _about)}
         {_dialog(f'{icon("sigma")}<span>Model scheme</span>', "Model scheme and equations", _scheme, wide=True)}
         <a class="top-btn pdf" href="{_pdf}" download="model_reference.pdf">{icon("file-down")}<span>Equations (PDF)</span></a>
-        <a class="top-btn square" href="{REPO_URL}" target="_blank" rel="noreferrer" aria-label="Source code on GitHub">{icon("git-branch")}</a>
       </nav></div></header>""")
     return
 
@@ -859,7 +860,18 @@ def _():
 @app.cell(hide_code=True)
 def _():
     # Mode selector, overlapping the bottom of the hero.
-    MODE_TABS = {f"Mode {m['n']}{' · soon' if m.get('soon') else ''} — {m['title']}": m["value"] for m in MODES}
+    # Each tab label is a small card: the mode's icon on its own colour.
+    # (Inline styles: the tab bar is drawn by marimo, out of reach of custom.css.)
+    def _mode_label(m):
+        color = MODE_COLORS[m["value"]]
+        soon = " · soon" if m.get("soon") else ""
+        return (f'<div title="{m["caption"]}" style="display:flex;align-items:center;gap:10px;text-align:left;padding:2px 6px">'
+                f'<span style="display:grid;place-items:center;width:30px;height:30px;flex-shrink:0;border-radius:8px;'
+                f'background:{color};color:#06121d">{icon(ICON_OF_MODE[m["value"]], 17)}</span>'
+                f'<span style="line-height:1.15"><span style="display:block;font-size:11px;font-weight:600;color:{color}">'
+                f'Mode {m["n"]}{soon}</span><span style="display:block;font-size:13.5px;font-weight:600">{m["title"]}</span></span></div>')
+
+    MODE_TABS = {_mode_label(m): m["value"] for m in MODES}
     mode_picker = mo.ui.tabs({k: "" for k in MODE_TABS})
     return MODE_TABS, mode_picker
 
