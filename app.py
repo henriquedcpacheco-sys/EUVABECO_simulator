@@ -940,9 +940,9 @@ def _(get_fit_bands, get_fit_tab, set_fit_bands, set_fit_tab):
     # both off shows the least-squares fit. (Each switch needs a name of its own:
     # marimo only reacts to widgets kept in global variables.)
     _cred, _pred = get_fit_bands()
-    fit_cred_switch = mo.ui.switch(value=_cred, label="**95% credible interval** (darker band)",
+    fit_cred_switch = mo.ui.switch(value=_cred, label="**95% credible interval**",
                                    on_change=lambda v: set_fit_bands((v, get_fit_bands()[1])))
-    fit_pred_switch = mo.ui.switch(value=_pred, label="**95% posterior predictive** (lighter band)",
+    fit_pred_switch = mo.ui.switch(value=_pred, label="**95% posterior predictive**",
                                    on_change=lambda v: set_fit_bands((get_fit_bands()[0], v)))
     fit_bands = mo.Html(f'<div style="display:flex;flex-wrap:wrap;gap:8px 32px">{fit_cred_switch}{fit_pred_switch}</div>')
     return fit_bands, fit_cred_switch, fit_pred_switch, fit_tabs
@@ -1062,16 +1062,16 @@ def _(
           independent observations than the raw number of days.</p>
           <p>500 parameter sets were taken from the chain, spread evenly over the pooled chains, and are used to build both bands.</p>
           <div class="cols2">
-            <div><h4>95% credible interval (darker band): uncertainty in the model curve</h4><ul>
+            <div><h4>95% credible interval: uncertainty in the model curve</h4><ul>
               <li>Each of the 500 parameter sets is run through the ODE model, giving 500 model trajectories per series.</li>
               <li>On each day, the band goes from the 2.5% to the 97.5% quantile of those 500 values, so it holds the middle
               95% of the trajectories.</li></ul></div>
-            <div><h4>95% posterior predictive interval (lighter band)</h4><ul>
-              <li>It uses the same 500 parameter sets, taken evenly spaced from the pooled chains, as the darker band.</li>
+            <div><h4>95% posterior predictive interval</h4><ul>
+              <li>It uses the same 500 parameter sets, taken evenly spaced from the pooled chains, as the credible interval.</li>
               <li>Every MCMC iteration saves, next to the parameter set, the noise variance σ² drawn at that same iteration;
               for parameter set <i>i</i>, its own σ<sub>i</sub>² is used.</li>
               <li>Each trajectory Y<sub>v</sub><sup>(i)</sup>(t) (series <i>v</i>, parameter set <i>i</i>) is run through the
-              ODE model, as for the darker band, and then multiplied on each day by exp(ε<sub>i</sub>(t)), with
+              ODE model, as for the credible interval, and then multiplied on each day by exp(ε<sub>i</sub>(t)), with
               ε<sub>i</sub>(t) ~ N(0, σ<sub>i</sub>²) drawn independently each day: the same log-scale noise the model is fit with.</li>
               <li>On each day, the band goes from the 2.5% to the 97.5% quantile of those 500 noisy values.</li>
               <li>It is the actual posterior predictive interval: the range a new observation on that day could plausibly fall in.</li>
