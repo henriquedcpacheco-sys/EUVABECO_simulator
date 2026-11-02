@@ -208,7 +208,6 @@ with app.setup:
     STEPS_PER_DAY = 20
     AGE_NTNORM = 12632                # Ch(t) = exp(-F_test * NT(t) / AGE_NTNORM)
     AGE_MULT = np.array([1.0, 2.0, 4.0, 8.0])
-    N_BAND_DRAWS = 500
 
     # Scenarios: the two real lockdowns stay as fitted, so an extra lockdown
     # goes before the first or between the two. Schools reopened on day 197;
@@ -432,32 +431,6 @@ def run_scenario(model: str, scn: tuple | None, fixed: tuple = ()) -> dict:
         n_days = N_DAYS + days
     tr = simulate(inp, sched, fixed=dict(fixed), n_days=n_days)
     return {k: v[:, 0].tolist() for k, v in tr.items()}
-
-
-@app.function
-@cache
-def baseline_bands() -> dict:
-    """95% posterior-predictive band of the fitted Model 3b baseline: 500
-    posterior draws are integrated together, each with its own psi(t)
-    (rebuilt from the age mix and the testing volume), then multiplied
-    each day by exp(eps), eps ~ N(0, sigma2 of that draw)."""
-    ad = load("age_draws")
-    d = {k: np.asarray(v, float) for k, v in ad["draws"].items()}
-    m_t = np.asarray(ad["mix"]) @ AGE_MULT                          # (N_DAYS,)
-    nt = np.asarray(ad["NT"])
-    psi = np.exp(-np.outer(nt, d["F_test"]) / AGE_NTNORM) * d["psi_base"] * m_t[:, None]
-    betas = [d[f"beta{k}"] for k in range(1, 6)]
-    n = len(d["theta"])
-    inp = dict(theta=d["theta"], phi_h=d["phi_h"], phi_c=d["r_c"] * d["phi_h"], E0=d["E0"], I0=1.0, psi=psi)
-    tr = simulate(inp, fitted_schedule(betas), n=n)
-    rng = np.random.default_rng(20231024)
-    sd = np.sqrt(d["sigma2"])
-    bands = {}
-    for s in SERIES:
-        noisy = np.exp(np.log(np.maximum(tr[s], 0) + 1) + rng.standard_normal(tr[s].shape) * sd) - 1
-        lo, hi = np.quantile(noisy, [0.025, 0.975], axis=1)
-        bands[s] = {"lo": lo.tolist(), "hi": hi.tolist()}
-    return bands
 
 
 # =========================================================================
@@ -1430,7 +1403,6 @@ def _():
     get_scn_config, set_scn_config = mo.state(None)   # the last run: (model, scenario, (first day, last day))
     get_saved, set_saved = mo.state([])                # saved simulations, for Compare
     get_scn_tab, set_scn_tab = mo.state("Results")
-    get_scn_bands, set_scn_bands = mo.state(False)
     SCN_MODELS = {model_label(MODEL_OPTIONS[c][0], MODEL_OPTIONS[c][2]): v for v, c in
                   [("sim_m1", "sim_m1"), ("sim_m2", "sim_m2"), ("age_nocorr", "age_nocorr"), ("age_point", "age_3b")]}
     scn_model = mo.ui.tabs({k: "" for k in SCN_MODELS}, orientation="vertical")
@@ -1449,8 +1421,8 @@ def _():
     scn_fixed = mo.ui.dictionary({f[0]: mo.ui.number(start=f[3], stop=f[4], step=f[5], value=f[2], label=f[1], full_width=True)
                                   for f in FIXED_FIELDS})
     scn_ov_preset, scn_ov_left, scn_ov_right = overlay_widgets()
-    return (SCN_MODELS, scn_beta, scn_fixed, scn_kind, scn_until, get_saved, get_scn_bands, get_scn_config, get_scn_tab, scn_delay, scn_model, scn_ov_left, scn_ov_preset,
-            scn_ov_right, scn_period, scn_red, scn_type, scn_view, scn_zone, set_saved, set_scn_bands, set_scn_config,
+    return (SCN_MODELS, scn_beta, scn_fixed, scn_kind, scn_until, get_saved, get_scn_config, get_scn_tab, scn_delay, scn_model, scn_ov_left, scn_ov_preset,
+            scn_ov_right, scn_period, scn_red, scn_type, scn_view, scn_zone, set_saved, set_scn_config,
             set_scn_tab)
 
 
@@ -1484,13 +1456,11 @@ def _(
     scn_period,
     scn_red,
     scn_type,
-    set_scn_bands,
     set_scn_config,
     set_scn_tab,
     start_day,
 ):
-    # "Run scenario simulation": freeze the current set-up as the run to show;
-    # every new run starts without the Bayesian band.
+    # "Run scenario simulation": freeze the current set-up as the run to show.
     def _run(clicks):
         kind = scn_type.value
         if scn_kind.value == "pro":
@@ -1508,7 +1478,6 @@ def _(
         fixed = tuple(sorted((k, float(v)) for k, v in scn_fixed.value.items()
                              if v is not None and float(v) != FIXED_DEFAULTS[k]))
         set_scn_config((SCN_MODELS[scn_model.value], scn, ((a - DAY0.date()).days, (b - DAY0.date()).days), fixed))
-        set_scn_bands(False)
         set_scn_tab("Results")
         return clicks + 1
 
@@ -1600,13 +1569,10 @@ def _(get_saved, get_scn_tab, mode, set_scn_tab):
 
 
 @app.cell(hide_code=True)
-def _(get_saved, get_scn_bands, get_scn_config, scn_fixed, set_saved, set_scn_bands, set_scn_config):
-    # Controls shown with a result: its name, Save, and the band switch.
+def _(get_saved, get_scn_config, scn_fixed, set_saved, set_scn_config):
+    # Controls shown with a result: its name, Save, and re-running with other fixed parameters.
     _config = get_scn_config()
-    _available = _config is not None and _config[0] == "age_point" and _config[1] is None and not _config[3]
     scn_name = mo.ui.text(value=scenario_title(_config[0], _config[1], _config[3]) if _config else "", full_width=True)
-    scn_bands = mo.ui.switch(value=get_scn_bands() and _available, disabled=not _available, on_change=set_scn_bands,
-                             label=f"**Show 95% Bayesian band ({N_BAND_DRAWS} posterior draws)**")
 
     def _save(clicks):
         model, scn, period, fixed = get_scn_config()
@@ -1629,21 +1595,18 @@ def _(get_saved, get_scn_bands, get_scn_config, scn_fixed, set_saved, set_scn_ba
         model, scn, period, _ = get_scn_config()
         fixed = tuple(sorted((k, float(v)) for k, v in scn_fixed.value.items()
                              if v is not None and float(v) != FIXED_DEFAULTS[k]))
-        set_scn_bands(False)
         set_scn_config((model, scn, period, fixed))
         return clicks + 1
 
     scn_rerun = mo.ui.button(label="Re-run with these values", value=0, on_click=_rerun, kind="success")
-    return scn_bands, scn_name, scn_rerun, scn_save
+    return scn_name, scn_rerun, scn_save
 
 
 @app.cell(hide_code=True)
 def _(
-    get_scn_bands,
     get_scn_config,
     get_scn_tab,
     mode,
-    scn_bands,
     scn_fixed,
     scn_name,
     scn_ov_left,
@@ -1663,19 +1626,14 @@ def _(
         title = scenario_title(model, scn, fixed)
         inp = load("sim_inputs")[model]
         b4, b5 = inp["betas"][3], inp["betas"][4]
-        bands_available = model == "age_point" and scn is None and not fixed
         projection_note = ""
         if scn and scn[0] == "prospective":
             projection_note = (f" From 01/01/2021, β = {b5 * (1 + scn[2] / 100):.4f}. The hospitalisation probability ψ is "
                                "kept at its last fitted value: the 2021 age mix of cases and testing volume are not used.")
-        bands = baseline_bands() if bands_available and get_scn_bands() else None
         metrics = compute_metrics(times, tr, times, tr["Rt"], start, end)
 
         def panel(s):
-            layers = []
-            if s != "Rt" and bands:
-                layers.append(("band", "95% predictive", bands[s]["lo"], bands[s]["hi"], COLORS[s], 0.22))
-            layers.append(("line", "Scenario" if scn else "Simulated", tr[s], COLORS[s]))
+            layers = [("line", "Scenario" if scn else "Simulated", tr[s], COLORS[s])]
             return time_panel(times, layers, start, end, None if s == "Rt" else SERIES_SHORT[s], window=window,
                               rt_line=s == "Rt", y_digits=1 if s == "Rt" else None, y_title="Rₜ" if s == "Rt" else None,
                               lockdowns=True)
@@ -1683,8 +1641,6 @@ def _(
         view = scn_view.value
         if view == "Plots":
             leg = [("line", CT["muted"], "Scenario" if scn else "Simulated (fitted baseline)")]
-            if bands:
-                leg.append(("band", CT["muted"], f"95% predictive band ({N_BAND_DRAWS} posterior draws)"))
             if window:
                 leg.append(("window", CT["window"], f"Window where it differs ({window[2]})"))
             leg.append(("window", LOCKDOWN_COLOR, "Lockdowns that happened (30/03 – 10/05/2020, from 06/11/2020)"))
@@ -1701,21 +1657,18 @@ def _(
                         f'{chart(overlay_chart(start, end, side(a), side(b), window, lockdowns=True), 360)}</div>', "Overlay",
                         "Compare two simulated series on the same time axis, each with its own y-axis, so that their "
                         "different scales do not matter.")
-        band_hint = ("Integrates 500 posterior draws of Model 3b and adds the fitted observation noise, corrected for residual "
-                     "autocorrelation." if bands_available else
-                     "Available for the Model 3b baseline (no counterfactual scenario, literature values of the fixed parameters).")
+        fixed_note = ""
         if fixed:
             names = {f[0]: f[1] for f in FIXED_FIELDS}
             changed = "; ".join(f"{names[k]} = {v:g} (literature: {FIXED_DEFAULTS[k]:g})" for k, v in fixed)
-            band_hint += f"</span><span class='hint-under'><strong>Fixed parameters changed:</strong> {changed}."
+            fixed_note = f'<p class="small" style="font-size:13px;margin-top:4px"><strong>Fixed parameters changed:</strong> {changed}.</p>'
         return f"""<div class="stack">
           <div><div class="result-head"><h2>{title}</h2></div>
           <p class="small" style="font-size:13px;margin-top:4px">Period: {fmt_date(start)} – {fmt_date(end)}. Only simulated values
           are shown. For reference, the fitted switch on 06/11/2020 already reduces β by {100 * (1 - b5 / b4):.0f}% in this model
-          (β₄ = {b4:.4f} → β₅ = {b5:.4f}).{projection_note}</p></div>
+          (β₄ = {b4:.4f} → β₅ = {b5:.4f}).{projection_note}</p>{fixed_note}</div>
           <div class="soft-panel" style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px">
             <div style="flex:1;min-width:220px">{field(f"{scn_name}", "Name for this simulation")}</div><div class="save-wrap">{scn_save}</div></div>
-          <div class="soft-panel">{scn_bands}<span class="hint-under">{band_hint}</span></div>
           <details class="exp" {"open" if fixed else ""}><summary><span class="ic">{icon("lock")}</span>Fixed parameters
             <span class="chev">{icon("chevron-down")}</span></summary><div class="in stack-sm">
             <p class="small">Propose other values for the parameters taken from the literature and re-run this scenario.
