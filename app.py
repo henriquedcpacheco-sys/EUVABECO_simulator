@@ -216,10 +216,10 @@ with app.setup:
     FREE_ZONES = [("Before the spring lockdown", 0, FITTED_CP[0]),
                   ("Between the two lockdowns", FITTED_CP[1], FITTED_CP[3])]
     # Prospective scenarios start from the fitted state on 31/12/2020 (day 305)
-    # and run for at most 3 months; their plots start on 01/10/2020 for context.
+    # and run for at most 3 months; their plots show the whole series from 01/03/2020.
     LAST_DAY = N_DAYS - 1
     MAX_PROJECTION = 90
-    PROJECTION_PLOT_START = 214
+    PROJECTION_PLOT_START = 0
     REAL_LOCKDOWNS = [(FITTED_CP[0], FITTED_CP[1]), (FITTED_CP[3], N_DAYS - 1)]   # the two that happened
     SCHOOL_CP, NEXT_CP = FITTED_CP[2], FITTED_CP[3]
     MAX_SCHOOL_DELAY = NEXT_CP - SCHOOL_CP - 1
