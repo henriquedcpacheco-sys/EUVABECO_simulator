@@ -84,6 +84,7 @@ with app.setup:
     CT = dict(text="#e6eaf0", muted="#8b95a6", grid="#222c39", axis="#3a4658",
               rule="#7d889a", obs="#9aa3b2", window="#f07a55", border="#34425a", tooltip="#1b2430")
     FONT = "Inter Variable, system-ui, sans-serif"
+    LOCKDOWN_COLOR = "#7c8cf8"   # shading of the two lockdowns that happened
 
     DAY0 = datetime(2020, 3, 1, tzinfo=timezone.utc)   # day 0 of the simulator
     N_DAYS = 306
@@ -214,6 +215,7 @@ with app.setup:
     # that switch can move later, but not past the Nov 2020 tightening.
     FREE_ZONES = [("Before the spring lockdown", 0, FITTED_CP[0]),
                   ("Between the two lockdowns", FITTED_CP[1], FITTED_CP[3])]
+    REAL_LOCKDOWNS = [(FITTED_CP[0], FITTED_CP[1]), (FITTED_CP[3], N_DAYS - 1)]   # the two that happened
     SCHOOL_CP, NEXT_CP = FITTED_CP[2], FITTED_CP[3]
     MAX_SCHOOL_DELAY = NEXT_CP - SCHOOL_CP - 1
 
@@ -487,9 +489,17 @@ def value_axis(digits: int | None = None, title: str | None = None) -> dict:
 
 
 @app.function
-def marks(start: int, end: int, window: tuple | None = None, rt_line: bool = False, changepoints: bool = True) -> list:
-    """Dashed changepoint lines, the Rt = 1 line and the scenario window."""
+def marks(start: int, end: int, window: tuple | None = None, rt_line: bool = False, changepoints: bool = True,
+          lockdowns: bool = False) -> list:
+    """Dashed changepoint lines, the Rt = 1 line, the scenario window and
+    (lockdowns=True) the two lockdowns that actually happened."""
     shapes = []
+    if lockdowns:
+        for a, b in REAL_LOCKDOWNS:
+            a, b = max(day_to_time(a), start), min(day_to_time(b), end)
+            if a < b:
+                shapes.append(dict(type="rect", xref="x", yref="paper", x0=iso(a), x1=iso(b), y0=0, y1=1,
+                                   fillcolor=LOCKDOWN_COLOR, opacity=0.13, line=dict(width=0), layer="below"))
     if changepoints:
         for ev in NPI_EVENTS:
             t = day_to_time(iso_to_day(ev[2]))
@@ -503,13 +513,13 @@ def marks(start: int, end: int, window: tuple | None = None, rt_line: bool = Fal
         a, b = max(window[0], start), min(window[1], end)
         if a < b:
             shapes.append(dict(type="rect", xref="x", yref="paper", x0=iso(a), x1=iso(b), y0=0, y1=1,
-                               fillcolor=CT["window"], opacity=0.12, line=dict(width=0), layer="below"))
+                               fillcolor=CT["window"], opacity=0.24, line=dict(width=0), layer="below"))
     return shapes
 
 
 @app.function
 def time_panel(times: list, layers: list, start: int, end: int, title: str | None = None,
-               window=None, rt_line=False, y_digits=None, y_title=None) -> go.Figure:
+               window=None, rt_line=False, y_digits=None, y_title=None, lockdowns=False) -> go.Figure:
     """Layers: ("dots", name, values, color), ("line", name, values, color, width),
     ("band", name, lo, hi, color, opacity)."""
     idx = [i for i, t in enumerate(times) if start <= t <= end]
@@ -536,12 +546,12 @@ def time_panel(times: list, layers: list, start: int, end: int, title: str | Non
                             fill="tonexty", fillcolor=rgba(L[4], L[5]), hovertemplate="%{y:,.1f}")
     fig.update_layout(**base_layout(title), xaxis=time_axis(start, end),
                       yaxis=value_axis(y_digits, y_title),
-                      shapes=marks(start, end, window, rt_line))
+                      shapes=marks(start, end, window, rt_line, lockdowns=lockdowns))
     return fig
 
 
 @app.function
-def overlay_chart(start: int, end: int, left: dict, right: dict, window=None) -> dict:
+def overlay_chart(start: int, end: int, left: dict, right: dict, window=None, lockdowns=False) -> dict:
     """Two series on one time axis, each with its own y-axis."""
     fig = go.Figure()
     for side, yaxis in ((left, "y"), (right, "y2")):
@@ -558,7 +568,7 @@ def overlay_chart(start: int, end: int, left: dict, right: dict, window=None) ->
             ax.update(overlaying="y")
         return ax
 
-    shapes = marks(start, end, window)
+    shapes = marks(start, end, window, lockdowns=lockdowns)
     for s, yref in ((left, "y"), (right, "y2")):
         if s["is_rt"]:
             shapes.append(dict(type="line", xref="paper", yref=yref, x0=0, x1=1, y0=1, y1=1,
@@ -621,7 +631,7 @@ def histogram_chart(title: str, edges: list, counts: list, mean: float, ls: floa
 
 
 @app.function
-def compare_chart(items: list, y_title: str, is_rt: bool) -> dict:
+def compare_chart(items: list, y_title: str, is_rt: bool, lockdowns: bool = True) -> dict:
     """One line per saved simulation."""
     start = min(s["times"][0] for s in items)
     end = max(s["times"][-1] for s in items)
@@ -635,7 +645,7 @@ def compare_chart(items: list, y_title: str, is_rt: bool) -> dict:
                   legend=dict(orientation="v", x=0, y=-0.08, xanchor="left", yanchor="top",
                               font=dict(size=12, color=CT["text"])))
     fig.update_layout(**layout, xaxis=time_axis(start, end), yaxis=value_axis(1 if is_rt else None, y_title),
-                      shapes=marks(start, end, rt_line=is_rt))
+                      shapes=marks(start, end, rt_line=is_rt, lockdowns=lockdowns))
     return fig
 
 
@@ -1616,7 +1626,8 @@ def _(
                 layers.append(("band", "95% predictive", bands[s]["lo"], bands[s]["hi"], COLORS[s], 0.22))
             layers.append(("line", "Scenario" if scn else "Simulated", tr[s], COLORS[s]))
             return time_panel(times, layers, start, end, None if s == "Rt" else SERIES_SHORT[s], window=window,
-                              rt_line=s == "Rt", y_digits=1 if s == "Rt" else None, y_title="Rₜ" if s == "Rt" else None)
+                              rt_line=s == "Rt", y_digits=1 if s == "Rt" else None, y_title="Rₜ" if s == "Rt" else None,
+                              lockdowns=True)
 
         view = scn_view.value
         if view == "Plots":
@@ -1625,6 +1636,7 @@ def _(
                 leg.append(("band", CT["muted"], f"95% predictive band ({N_BAND_DRAWS} posterior draws)"))
             if window:
                 leg.append(("window", CT["window"], f"Window where it differs ({window[2]})"))
+            leg.append(("window", LOCKDOWN_COLOR, "Lockdowns that happened (30/03 – 10/05/2020, from 06/11/2020)"))
             leg.append(("rule", CT["rule"], "Fitted changepoint"))
             body = (legend(leg) + panel_grid([chart_card(chart(panel(s), 250), COLORS[s]) for s in SERIES])
                     + card(chart(panel("Rt"), 260), "Effective reproduction number Rₜ"))
@@ -1635,7 +1647,7 @@ def _(
             a, b = overlay_pair(scn_ov_preset, scn_ov_left, scn_ov_right)
             side = lambda n: dict(name=n, times=times, values=tr[names[n]], color=COLORS[names[n]], is_rt=names[n] == "Rt")
             body = card(f'<div class="stack-sm">{overlay_picker_html(scn_ov_preset, scn_ov_left, scn_ov_right)}'
-                        f'{chart(overlay_chart(start, end, side(a), side(b), window), 360)}</div>', "Overlay",
+                        f'{chart(overlay_chart(start, end, side(a), side(b), window, lockdowns=True), 360)}</div>', "Overlay",
                         "Compare two simulated series on the same time axis, each with its own y-axis, so that their "
                         "different scales do not matter.")
         band_hint = ("Integrates 500 posterior draws of Model 3b and adds the fitted observation noise, corrected for residual "
@@ -1734,7 +1746,8 @@ def _(cmp_chosen, cmp_drop, cmp_remove, cmp_series, get_saved, get_scn_tab, mode
                                  filename="saved_scenarios.csv", label="Trajectories (CSV)")
             dl_plot = mo.download(data=lambda: figures_html(f"{label} — saved simulations", [fig]).encode(),
                                   filename=f"compare_{series}.html", label="Comparison plot (HTML)")
-            out += f"""{chart_card(chart(fig, 380 + 20 * len(items)))}
+            out += f"""{legend([("window", LOCKDOWN_COLOR, "Lockdowns that happened (30/03 – 10/05/2020, from 06/11/2020)")])}
+              {chart_card(chart(fig, 380 + 20 * len(items)))}
               <div><h4 class="sec">Summary <span class="muted" style="font-weight:400">(differences relative to
               <strong>{items[0]["name"]}</strong>)</span></h4>
               {table([("name", "Simulation", "b"), ("period", "Period", "nw soft"), ("cases", "Total cases", "r"), ("dc", "vs first", "r"),
