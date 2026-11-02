@@ -157,10 +157,7 @@ with app.setup:
     # model picker label -> model key, as used by the fit modes
     MODEL_BY_LABEL = {model_label(v[0], v[2]): k for k, v in MODEL_OPTIONS.items()}
     # how each model is fitted to the data
-    METHOD_BY_LABEL = {
-        model_label("Nonlinear least squares", "One best-fitting value for each parameter"): "lsq",
-        model_label("Bayesian inference (MCMC)", "A posterior distribution for each parameter, with 95% bands"): "bayes",
-    }
+    METHOD_BY_LABEL = {"Nonlinear least squares": "lsq", "Bayesian inference (MCMC)": "bayes"}
     POINT_KEY = {"sim_m1": "sim_m1", "sim_m2": "sim_m2", "age_nocorr": "age_nocorr", "age_3b": "age_point"}
     BAYES_KEY = {"sim_m1": "sim_m1_bayes", "sim_m2": "sim_m2_bayes",
                  "age_nocorr": "age_nocorr_bayes", "age_3b": "age_bayes"}
@@ -948,7 +945,7 @@ def _(mode):
     get_fit_bands, set_fit_bands = mo.state((True, True))           # Bayesian: (credible band shown, predictive band shown)
 
     fit_model = mo.ui.tabs({k: "" for k in MODEL_BY_LABEL}, orientation="vertical")
-    fit_method = mo.ui.tabs({k: "" for k in METHOD_BY_LABEL}, orientation="vertical")
+    fit_method = mo.ui.dropdown(list(METHOD_BY_LABEL), value="Nonlinear least squares", full_width=True)
     _first, _last = (datetime.fromtimestamp(t / 1000, tz=timezone.utc).date() for t in (obs_times[0], obs_times[-1]))
     fit_period = mo.ui.date_range(start=_first, stop=_last, value=(_first, _last), full_width=True)
 
@@ -1003,9 +1000,8 @@ def _(fit_method, fit_model, fit_period, fit_run, mode):
             _period = field(f"{fit_period}", "Period to display",
                             "All models were fitted on 1 March – 31 December 2020. This selects the window shown in every plot.")
         _hint = "The models differ in how the hospitalisation probability ψ is constructed."
-        _method_hint = "How the model is fitted to the four daily series."
         _body = (f'<div class="stack">{_period}{field(f"{fit_model}", "Model", _hint)}'
-                 f'{field(f"{fit_method}", "Fitting method", _method_hint)}<div class="run-wrap">{fit_run}</div></div>')
+                 f'{field(f"{fit_method}", "Fitting method")}<div class="run-wrap">{fit_run}</div></div>')
         _sub = ("Choose the period, a model and a fitting method." if mode == "partial"
                 else "1 March – 31 December 2020. Choose a model and a fitting method.")
         _out = page(mode, card(_body, "Set up the fit", _sub, "sliders-horizontal", accent=True), "side")
