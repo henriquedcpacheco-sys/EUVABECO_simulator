@@ -117,7 +117,7 @@ with app.setup:
     ]
 
     MODEL_OPTIONS = {
-        "sim_m1": ("Model 1 — constant", "Model 1", "One hospitalisation probability ψ for the whole year"),
+        "sim_m1": ("Model 1 — constant", "Model 1", "One hospitalisation probability ψ for the whole period"),
         "sim_m2": ("Model 2 — piecewise ψ", "Model 2", "One value per NPI segment"),
         "age_nocorr": ("Model 3a — age-stratified ψ", "Model 3a", "Without testing-volume coupling"),
         "age_3b": ("Model 3b — age-stratified ψ", "Model 3b", "With testing-volume coupling"),
@@ -158,8 +158,8 @@ with app.setup:
     MODE_COLORS = {"early": "#4ea8e3", "partial": "#34c3ad", "scenarios": "#f2865f", "vaccination": "#b591d6"}
     ICON_OF_MODE = {"early": "activity", "partial": "waypoints", "scenarios": "flask-conical", "vaccination": "syringe"}
     MODES = [
-        dict(value="early", n=1, title="Estimate early dynamics", caption="Whole of 2020, fixed time period", icon=ICONS["activity"]),
-        dict(value="partial", n=2, title="Estimate partial early dynamics", caption="Choose the time period", icon=ICONS["waypoints"]),
+        dict(value="early", n=1, title="Modeling early dynamics", caption="1 March – 31 December 2020, fixed period", icon=ICONS["activity"]),
+        dict(value="partial", n=2, title="Modeling partial early dynamics", caption="Choose the time period", icon=ICONS["waypoints"]),
         dict(value="scenarios", n=3, title="Transmission scenarios", caption="Extra lockdown or later school reopening", icon=ICONS["flask-conical"]),
         dict(value="vaccination", n=4, title="Model with vaccination", caption="Not available yet", icon=ICONS["syringe"], soon=True),
     ]
@@ -948,10 +948,10 @@ def _(fit_model, fit_period, fit_run, mode):
         _period = ""
         if mode == "partial":
             _period = field(f"{fit_period}", "Period to display",
-                            "All models were fitted on the whole of 2020. This selects the window shown in every plot.")
+                            "All models were fitted on 1 March – 31 December 2020. This selects the window shown in every plot.")
         _hint = "The models differ in how the hospitalisation probability ψ is constructed."
         _body = f'<div class="stack">{_period}{field(f"{fit_model}", "Model", _hint)}<div class="run-wrap">{fit_run}</div></div>'
-        _sub = "Choose the period and a model." if mode == "partial" else "Whole of 2020. Choose a model."
+        _sub = "Choose the period and a model." if mode == "partial" else "1 March – 31 December 2020. Choose a model."
         _out = page(mode, card(_body, "Set up the fit", _sub, "sliders-horizontal", accent=True), "side")
     _out
     return

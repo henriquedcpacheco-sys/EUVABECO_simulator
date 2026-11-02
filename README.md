@@ -20,10 +20,10 @@ marimo edit app.py         # the notebook, to change the code
 
 ## Modes
 
-1. **Estimate early dynamics**: the fitted models (1, 2, 3a, 3b) over the whole
-   of 2020. A run shows the least-squares fit; a toggle in the results then
+1. **Modeling early dynamics**: the fitted models (1, 2, 3a, 3b) from 1 March to
+   31 December 2020. A run shows the least-squares fit; a toggle in the results then
    switches to the Bayesian MCMC posterior (credible and predictive bands).
-2. **Estimate partial early dynamics**: the same, for a chosen period.
+2. **Modeling partial early dynamics**: the same, for a chosen period.
 3. **Transmission scenarios**: an extra lockdown (Rₜ reduction on top of the
    fitted transmission, outside the two real lockdowns) or a later school
    reopening, simulated with the ODE model; save runs and compare them. For the
