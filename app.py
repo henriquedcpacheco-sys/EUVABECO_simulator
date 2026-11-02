@@ -1334,7 +1334,7 @@ def _():
     SCN_MODELS = {model_label(MODEL_OPTIONS[c][0], MODEL_OPTIONS[c][2]): v for v, c in
                   [("sim_m1", "sim_m1"), ("sim_m2", "sim_m2"), ("age_nocorr", "age_nocorr"), ("age_point", "age_3b")]}
     scn_model = mo.ui.tabs({k: "" for k in SCN_MODELS}, orientation="vertical")
-    scn_type = mo.ui.radio({"Baseline": "baseline", "Extra lockdown": "lockdown", "Later reopening": "school"},
+    scn_type = mo.ui.radio({"Baseline": "baseline", "Extra lockdown": "lockdown", "Later school reopening": "school"},
                            value="Extra lockdown", inline=True)
     scn_zone = mo.ui.radio({z[0]: z for z in FREE_ZONES}, value=FREE_ZONES[1][0])
     scn_red = mo.ui.slider(5, 90, step=5, value=40, show_value=True, full_width=True)
