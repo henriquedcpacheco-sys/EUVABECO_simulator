@@ -910,7 +910,7 @@ def _(mode):
     obs_times = [day_to_time(iso_to_day(observed["start"]) + i) for i in range(observed["n"])]
     get_fit_ran, set_fit_ran = mo.state(None)                       # model key of the last run
     get_fit_tab, set_fit_tab = mo.state("Data and fixed dates")     # open tab
-    get_fit_bands, set_fit_bands = mo.state(False)                  # Bayesian bands on/off
+    get_fit_bands, set_fit_bands = mo.state((False, False))         # (credible band on, predictive band on)
 
     fit_model = mo.ui.tabs({k: "" for k in MODEL_BY_LABEL}, orientation="vertical")
     _first, _last = (datetime.fromtimestamp(t / 1000, tz=timezone.utc).date() for t in (obs_times[0], obs_times[-1]))
@@ -920,7 +920,7 @@ def _(mode):
         # Always the least-squares fit first, bands off, Fitted model tab open.
         if fit_model.value:
             set_fit_ran(POINT_KEY[MODEL_BY_LABEL[fit_model.value]])
-            set_fit_bands(False)
+            set_fit_bands((False, False))
             set_fit_tab("Fitted model")
         return clicks + 1
 
@@ -936,8 +936,16 @@ def _(get_fit_bands, get_fit_tab, set_fit_bands, set_fit_tab):
     # Tab bar and bands switch follow the state, so a run can reset them.
     fit_tabs = mo.ui.tabs({"Data and fixed dates": "", "Parameters": "", "Fitted model": ""},
                           value=get_fit_tab(), on_change=set_fit_tab)
-    fit_bands = mo.ui.switch(value=get_fit_bands(), on_change=set_fit_bands, label="**Show 95% Bayesian bands (MCMC)**")
-    return fit_bands, fit_tabs
+    # One switch per Bayesian band; either one on shows the MCMC posterior,
+    # both off shows the least-squares fit. (Each switch needs a name of its own:
+    # marimo only reacts to widgets kept in global variables.)
+    _cred, _pred = get_fit_bands()
+    fit_cred_switch = mo.ui.switch(value=_cred, label="**95% credible interval** (darker band)",
+                                   on_change=lambda v: set_fit_bands((v, get_fit_bands()[1])))
+    fit_pred_switch = mo.ui.switch(value=_pred, label="**95% posterior predictive** (lighter band)",
+                                   on_change=lambda v: set_fit_bands((get_fit_bands()[0], v)))
+    fit_bands = mo.Html(f'<div style="display:flex;flex-wrap:wrap;gap:8px 32px">{fit_cred_switch}{fit_pred_switch}</div>')
+    return fit_bands, fit_cred_switch, fit_pred_switch, fit_tabs
 
 
 @app.cell(hide_code=True)
@@ -1041,9 +1049,9 @@ def _(
                    f'<b>{fmt_num(m["J"]["total"])}</b></div>')
             rows.append(dict(name=name, n=str(m["nEst"]), total=bar, **{k: fmt_num(m["J"][k]) for k in SERIES}))
         cols = [("name", "Model", "b"), ("n", "Estimated parameters", "r"),
-                *[(k, f"J — {'ICU' if k == 'icu' else k}", "r") for k in SERIES], ("total", "J — total")]
+                *[(k, f"Error J — {'ICU' if k == 'icu' else k}", "r") for k in SERIES], ("total", "Error J — total")]
         return card(table(cols, rows), "Models at a glance",
-                    "J: sum of squared log-residuals between data and model. The Bayesian column uses the posterior-mean parameters.")
+                    "Error J: sum of squared log-residuals between data and model. The Bayesian column uses the posterior-mean parameters.")
 
     def bands_explainer():
         return f"""<details class="exp"><summary><span class="ic">{icon("info")}</span>How the posterior was sampled and the two bands obtained<span class="chev">{icon("chevron-down")}</span></summary>
@@ -1098,9 +1106,13 @@ def _(
         for s in SERIES:
             if bayes:
                 b = fit["bands"]
-                layers = [("band", "95% predictive", b["obs_lo"][s], b["obs_hi"][s], COLORS[s], 0.16),
-                          ("band", "95% credible", b["pred_lo"][s], b["pred_hi"][s], COLORS[s], 0.38),
-                          ("dots", "Observed", observed[s], CT["obs"]),
+                show_cred, show_pred = get_fit_bands()
+                layers = []
+                if show_pred:
+                    layers.append(("band", "95% predictive", b["obs_lo"][s], b["obs_hi"][s], COLORS[s], 0.16))
+                if show_cred:
+                    layers.append(("band", "95% credible", b["pred_lo"][s], b["pred_hi"][s], COLORS[s], 0.38))
+                layers += [("dots", "Observed", observed[s], CT["obs"]),
                           ("line", "Model (posterior mean)", sim[s], DEEP[s], 2)]
             else:
                 layers = [("dots", "Observed", observed[s], CT["obs"]), ("line", "Fitted model", sim[s], COLORS[s])]
@@ -1139,7 +1151,7 @@ def _(
                       ("Model 3b — age-stratified, with coupling (least squares)", "Model 3b (least squares)")]
             comp_rows = [dict(Model=a, J=comp[b]["J"]["total"], own=False) for a, b in others] + [
                 dict(Model=f"{short} — Bayesian, at posterior-mean parameters", J=f["J_post_mean_params"]["total"], own=True),
-                dict(Model=f"{short} — Bayesian, posterior mean of J", J=f["J_draws_mean"]["total"], own=True)]
+                dict(Model=f"{short} — Bayesian, posterior mean of Error J", J=f["J_draws_mean"]["total"], own=True)]
             param_rows = [dict(name=param_symbol(p["name"]), ls=fmt_sig(p["point_est"]), mean=fmt_sig(p["post_mean"]),
                                ci=f"[{fmt_sig(p['ci_low'])}, {fmt_sig(p['ci_high'])}]", meaning=param_meaning(p["name"]))
                           for p in fit["params"]]
@@ -1155,15 +1167,15 @@ def _(
             models = list(comparison["models"])
             comp_csv = [[param_symbol(p), *[comparison["models"][mm]["params"][p] for mm in models]] for p in comparison["order"]]
             comp_csv.append(["Number of estimated parameters", *[comparison["models"][mm]["nEst"] for mm in models]])
-            for k, l in [("cases", "J — cases"), ("ward", "J — ward"), ("icu", "J — ICU"), ("deaths", "J — deaths"), ("total", "J — total")]:
+            for k, l in [("cases", "J — cases"), ("ward", "J — ward"), ("icu", "J — ICU"), ("deaths", "J — deaths"), ("total", "Error J — total")]:
                 comp_csv.append([l, *[comparison["models"][mm]["J"][k] for mm in models]])
             files = {
                 "all_models_comparison.csv": to_csv(["Parameter / error", *models], comp_csv),
                 "metrics.csv": to_csv(["Metric", "Simulated"], metrics_csv_rows(m)),
                 "objective_function_J.csv": (
-                    to_csv(["Series", "J at posterior-mean parameters", "Posterior mean of J", "95% interval of J"],
+                    to_csv(["Series", "Error J at posterior-mean parameters", "Posterior mean of Error J", "95% interval of Error J"],
                            [[r["Series"], round(r["a"], 1), round(r["b"], 1), f"[{fmt_num(r['lo'])}, {fmt_num(r['hi'])}]"] for r in j_rows])
-                    if bayes else to_csv(["Series", "J"], [[r["Series"], round(r["a"], 1)] for r in j_rows])),
+                    if bayes else to_csv(["Series", "Error J"], [[r["Series"], round(r["a"], 1)] for r in j_rows])),
                 "weekly_residual_breakdown.csv": to_csv(["week", *SERIES], [[fmt_date(w), *[round(wvals[s][i], 4) for s in SERIES]]
                                                                            for i, w in enumerate(weeks)]),
                 "estimated_parameters.csv": (
@@ -1176,7 +1188,7 @@ def _(
                 "overlay.html": figures_html(f"{pair[0]} (left) vs {pair[1]} (right) — simulated", [ov_fig]),
             }
             if bayes:
-                files["model_comparison_J.csv"] = to_csv(["Model", "J (total)"], [[r["Model"], round(r["J"], 1)] for r in comp_rows])
+                files["model_comparison_J.csv"] = to_csv(["Model", "Error J (total)"], [[r["Model"], round(r["J"], 1)] for r in comp_rows])
                 files["posterior_histograms.html"] = figures_html("Posterior distributions of the parameters", hist_figs)
             return zip_bytes(files)
 
@@ -1185,8 +1197,10 @@ def _(
         # ---- the open view
         view = fit_view.value
         if view == "Fit":
+            show_cred, show_pred = get_fit_bands()
             leg = (legend([("dot", CT["obs"], "Observed"), ("line", CT["muted"], "Model at posterior-mean parameters"),
-                           ("band", CT["muted"], "95% credible interval"), ("band-light", CT["muted"], "95% posterior predictive"),
+                           *([("band", CT["muted"], "95% credible interval")] if show_cred else []),
+                           *([("band-light", CT["muted"], "95% posterior predictive")] if show_pred else []),
                            ("rule", CT["rule"], "NPI date")]) if bayes else
                    legend([("dot", CT["obs"], "Observed"), ("line", CT["muted"], "Fitted model"), ("rule", CT["rule"], "NPI date")]))
             body = (leg + panel_grid([chart_card(chart(f, 260), COLORS[s]) for f, s in zip(fit_figs, SERIES)])
@@ -1198,25 +1212,25 @@ def _(
                      "Parameters are estimated by minimising the sum of squared log-residuals between each observed series "
                      "and its simulated counterpart, summed over the four series:")
             formula = mo.md(r"$$J = \sum_{s \,\in\, \{\text{cases, ward, ICU, deaths}\}} \sum_{t} \Big(\log(y_s(t)+1) - \log(\hat{y}_s(t)+1)\Big)^2$$")
-            more = ("<p>Since every parameter set in the posterior gives its own curve, J is also computed for each of the 500 "
-                    "parameter sets used for the bands, giving a posterior mean and a 95% interval for J.</p>" if bayes else "")
+            more = ("<p>Since every parameter set in the posterior gives its own curve, Error J is also computed for each of the 500 "
+                    "parameter sets used for the bands, giving a posterior mean and a 95% interval for Error J.</p>" if bayes else "")
             if bayes:
-                jt = table([("Series", "Series", "b"), ("a", "J at posterior-mean parameters", "r"), ("b", "Posterior mean of J", "r"),
-                            ("ci", "95% interval of J", "r")],
+                jt = table([("Series", "Series", "b"), ("a", "Error J at posterior-mean parameters", "r"), ("b", "Posterior mean of Error J", "r"),
+                            ("ci", "95% interval of Error J", "r")],
                            [dict(Series=r["Series"], a=fmt_num(r["a"]), b=fmt_num(r["b"]), ci=f"[{fmt_num(r['lo'])}, {fmt_num(r['hi'])}]",
                                  tot=r["Series"] == "Total") for r in j_rows], dense=True, highlight=lambda r: r["tot"])
-                ct_ = table([("Model", "Model"), ("J", "J (total)", "r")],
+                ct_ = table([("Model", "Model"), ("J", "Error J (total)", "r")],
                             [dict(Model=r["Model"], J=fmt_num(r["J"]), own=r["own"]) for r in comp_rows],
                             dense=True, highlight=lambda r: r["own"])
-                tables = (f'<div class="stack" style="margin-top:16px"><div><h4 class="sec">J per series</h4>{jt}</div>'
+                tables = (f'<div class="stack" style="margin-top:16px"><div><h4 class="sec">Error J per series</h4>{jt}</div>'
                           f'<div><h4 class="sec">Comparison with the other models <span class="muted" style="font-weight:400">'
                           f'(simultaneous fitting)</span></h4>{ct_}</div></div>'
                           '<p class="small" style="margin-top:16px">The least-squares fit is, by construction, the parameter set '
-                          'with the lowest J, so the posterior-mean curve has a slightly higher J, and the posterior mean of J, '
+                          'with the lowest Error J, so the posterior-mean curve has a slightly higher Error J, and the posterior mean of Error J, '
                           'which averages over all plausible parameter sets, is higher still.</p>')
             else:
                 tables = ('<div style="margin-top:16px;max-width:28rem">' + table(
-                    [("Series", "Series", "b"), ("a", "J", "r")],
+                    [("Series", "Series", "b"), ("a", "Error J", "r")],
                     [dict(Series=r["Series"], a=fmt_num(r["a"]), tot=r["Series"] == "Total") for r in j_rows],
                     dense=True, highlight=lambda r: r["tot"]) + "</div>")
             body = (card(f'<div class="lede" style="font-size:14px"><p style="margin:0 0 12px">{intro}</p>'
@@ -1252,8 +1266,9 @@ def _(
                         f"{chart(ov_fig, 360)}{note}</div>", "Overlay",
                         "Compare two simulated series on the same time axis, each with its own y-axis, so that their different "
                         "scales do not matter.")
-        hint = ('<span class="hint-under">Switches from the least-squares point estimates to the Bayesian posterior: credible '
-                'and predictive bands, the model at the posterior-mean parameters, and the posterior of every parameter.</span>')
+        hint = ('<span class="hint-under">Turn on either band, or both, to switch from the least-squares point estimates to the '
+                'Bayesian posterior (MCMC): the bands, the model at the posterior-mean parameters, and the posterior of every '
+                'parameter. With both off, the least-squares fit is shown.</span>')
         return f"""<div class="stack">
           <div class="result-head"><div><h2>{label}</h2><p>{fmt_date(start)} – {fmt_date(end)}</p></div>{download}</div>
           <div class="soft-panel">{fit_bands}{hint}</div>
@@ -1265,12 +1280,12 @@ def _(
         if model is None:
             out += empty_state("arrow-left", "Pick a model",
                                "Choose one of the four models, then press <strong>Run model fitting</strong>. The table below "
-                               "compares the fit error J of every model.") + models_at_a_glance()
+                               "compares the Error J of every model.") + models_at_a_glance()
         elif ran != POINT_KEY[model]:
             out += empty_state("play", "Ready to run", "Press <strong>Run model fitting</strong> to see the fitted result. "
-                               "The table below compares the fit error J of every model.") + models_at_a_glance()
+                               "The table below compares the Error J of every model.") + models_at_a_glance()
         else:
-            bayes = bool(get_fit_bands())
+            bayes = any(get_fit_bands())
             out += result(model, BAYES_KEY[model] if bayes else ran, bayes, start, end)
         return f'<div class="stack">{out}</div>'
 
