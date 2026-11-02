@@ -55,6 +55,7 @@ marimo edit app.py         # the notebook, to change the code
 After new MATLAB/MCMC exports, refresh the data:
 
 ```bash
+python scripts/age_bayes_from_draws.py path/to/exports   # Model 3b summaries from its own draws
 python scripts/build_data.py path/to/exports
 ```
 
