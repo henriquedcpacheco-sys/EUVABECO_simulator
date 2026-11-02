@@ -1565,7 +1565,7 @@ def _(get_saved, get_scn_bands, get_scn_config, scn_fixed, set_saved, set_scn_ba
         mo.status.toast(f"Saved as “{final}”", "Open Compare to compare it with other saved simulations.")
         return clicks + 1
 
-    scn_save = mo.ui.button(label="💾  Save simulation", value=0, on_click=_save, kind="success")
+    scn_save = mo.ui.button(label="Save simulation", value=0, on_click=_save, kind="success")
 
     def _rerun(clicks):
         # the last scenario again, with the fixed parameters proposed in the results
