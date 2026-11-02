@@ -27,7 +27,9 @@ marimo edit app.py         # the notebook, to change the code
 3. **Transmission scenarios**: an extra lockdown (reduction of the transmission
    rate β on top of its fitted value, outside the two real lockdowns) or a later school
    reopening, simulated with the ODE model, optionally with other values of the
-   fixed parameters; save runs and compare them. For the
+   fixed parameters; save runs and compare them. These are the retrospective
+   scenarios; prospective ones continue the fitted model after 31/12/2020 for up
+   to 3 months, with a chosen change of β from 01/01/2021. For the
    Model 3b baseline, a toggle adds the 95% band from 500 posterior draws.
 4. **Model with vaccination**: not available yet.
 

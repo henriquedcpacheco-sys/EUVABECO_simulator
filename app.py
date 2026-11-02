@@ -215,6 +215,11 @@ with app.setup:
     # that switch can move later, but not past the Nov 2020 tightening.
     FREE_ZONES = [("Before the spring lockdown", 0, FITTED_CP[0]),
                   ("Between the two lockdowns", FITTED_CP[1], FITTED_CP[3])]
+    # Prospective scenarios start from the fitted state on 31/12/2020 (day 305)
+    # and run for at most 3 months; their plots start on 01/10/2020 for context.
+    LAST_DAY = N_DAYS - 1
+    MAX_PROJECTION = 90
+    PROJECTION_PLOT_START = 214
     REAL_LOCKDOWNS = [(FITTED_CP[0], FITTED_CP[1]), (FITTED_CP[3], N_DAYS - 1)]   # the two that happened
     SCHOOL_CP, NEXT_CP = FITTED_CP[2], FITTED_CP[3]
     MAX_SCHOOL_DELAY = NEXT_CP - SCHOOL_CP - 1
@@ -346,10 +351,11 @@ def school_schedule(betas, delay: int) -> list:
 
 
 @app.function
-def simulate(inp: dict, schedule: list, n: int = 1, fixed: dict | None = None) -> dict:
+def simulate(inp: dict, schedule: list, n: int = 1, fixed: dict | None = None, n_days: int = N_DAYS) -> dict:
     """Integrate days 0..305. With n > 1 every input (betas, theta, ..., psi)
     holds one value per parameter set, and all n sets run at once. `fixed`
-    overrides the literature values of the fixed parameters (FIXED_FIELDS).
+    overrides the literature values of the fixed parameters (FIXED_FIELDS);
+    n_days > N_DAYS runs past the data, with psi held at its last value.
     Returns daily cases, ward, icu, deaths and Rt, each of shape (N_DAYS, n)."""
     fx = {**FIXED_DEFAULTS, **(fixed or {})}
     SIG, GC, GI, ALPHA = 1 / fx["latent"], 1 / fx["pre_conf"], 1 / fx["post_conf"], 1 / fx["home"]
@@ -361,9 +367,9 @@ def simulate(inp: dict, schedule: list, n: int = 1, fixed: dict | None = None) -
     I0 = np.broadcast_to(np.asarray(fx["I0"], float), (n,))
     y = np.zeros((10, n))
     y[0], y[1], y[2], y[3] = N_POP - E0 - I0, E0, I0 * f0, I0 * (1 - f0)
-    out = np.zeros((N_DAYS, 10, n))
+    out = np.zeros((n_days, 10, n))
     out[0] = y
-    beta_day = np.zeros((N_DAYS, n))
+    beta_day = np.zeros((n_days, n))
     hstep = 1 / STEPS_PER_DAY
 
     def rhs(y, beta, p):
@@ -385,7 +391,7 @@ def simulate(inp: dict, schedule: list, n: int = 1, fixed: dict | None = None) -
     for a, b, beta in schedule:
         beta = np.broadcast_to(np.asarray(beta, float), (n,))
         for day in range(a, b):
-            p = psi[min(max(day, 0), N_DAYS - 1)]   # psi of the day being integrated
+            p = psi[min(max(day, 0), N_DAYS - 1)]   # psi of the day being integrated (last value after 2020)
             for _ in range(STEPS_PER_DAY):
                 k1 = rhs(y, beta, p)
                 k2 = rhs(y + 0.5 * hstep * k1, beta, p)
@@ -408,16 +414,23 @@ def simulate(inp: dict, schedule: list, n: int = 1, fixed: dict | None = None) -
 @cache
 def run_scenario(model: str, scn: tuple | None, fixed: tuple = ()) -> dict:
     """One scenario run, as plain lists. scn: None (baseline),
-    ("lockdown", start, duration, reduction %) or ("school", delay);
-    fixed: ((name, value), ...) changes to the fixed parameters."""
+    ("lockdown", start, duration, reduction %), ("school", delay) or
+    ("prospective", days after 31/12/2020, change of beta %); fixed:
+    ((name, value), ...) changes to the fixed parameters."""
     inp = load("sim_inputs")[model]
+    n_days = N_DAYS
     if scn is None:
         sched = fitted_schedule(inp["betas"])
     elif scn[0] == "lockdown":
         sched = lockdown_schedule(inp["betas"], scn[1], scn[2], scn[3] / 100)
-    else:
+    elif scn[0] == "school":
         sched = school_schedule(inp["betas"], scn[1])
-    tr = simulate(inp, sched, fixed=dict(fixed))
+    else:
+        # the fitted year, then beta of the last period (from 06/11/2020) changed by scn[2] %
+        days, change = scn[1], scn[2]
+        sched = fitted_schedule(inp["betas"]) + [(LAST_DAY, LAST_DAY + days, inp["betas"][4] * (1 + change / 100))]
+        n_days = N_DAYS + days
+    tr = simulate(inp, sched, fixed=dict(fixed), n_days=n_days)
     return {k: v[:, 0].tolist() for k, v in tr.items()}
 
 
@@ -1385,6 +1398,9 @@ def scenario_title(model: str, scn: tuple | None, fixed: tuple = ()) -> str:
         title = f"{short} · Baseline"
     elif scn[0] == "lockdown":
         title = f"{short} · Extra lockdown from {fmt_date(day_to_time(scn[1]))}, {scn[2]} days, β −{scn[3]}%"
+    elif scn[0] == "prospective":
+        change = "β as fitted" if scn[2] == 0 else f"β {'+' if scn[2] > 0 else '−'}{abs(scn[2])}%"
+        title = f"{short} · Projection to {fmt_date(day_to_time(LAST_DAY + scn[1]))}, {change} from 01/01/2021"
     else:
         title = (f"{short} · School reopening delayed to {fmt_date(day_to_time(SCHOOL_CP + scn[1]))} "
                  f"({scn[1]} days later)")
@@ -1398,6 +1414,8 @@ def scenario_window(scn: tuple | None):
         return None
     if scn[0] == "lockdown":
         return (day_to_time(scn[1]), day_to_time(scn[1] + scn[2]), "Extra β reduction")
+    if scn[0] == "prospective":
+        return (day_to_time(LAST_DAY), day_to_time(LAST_DAY + scn[1]), "Projection beyond the data")
     return (day_to_time(SCHOOL_CP), day_to_time(SCHOOL_CP + scn[1]), "School reopening delayed")
 
 
@@ -1416,6 +1434,10 @@ def _():
     SCN_MODELS = {model_label(MODEL_OPTIONS[c][0], MODEL_OPTIONS[c][2]): v for v, c in
                   [("sim_m1", "sim_m1"), ("sim_m2", "sim_m2"), ("age_nocorr", "age_nocorr"), ("age_point", "age_3b")]}
     scn_model = mo.ui.tabs({k: "" for k in SCN_MODELS}, orientation="vertical")
+    scn_kind = mo.ui.radio({"Retrospective": "retro", "Prospective": "pro"}, value="Retrospective", inline=True)
+    scn_until = mo.ui.date(start=day_date(LAST_DAY + 1), stop=day_date(LAST_DAY + MAX_PROJECTION),
+                           value=day_date(LAST_DAY + MAX_PROJECTION), full_width=True)
+    scn_beta = mo.ui.slider(-90, 100, step=5, value=0, show_value=True, full_width=True)
     scn_type = mo.ui.radio({"Baseline": "baseline", "Extra lockdown": "lockdown", "Later school reopening": "school"},
                            value="Extra lockdown", inline=True)
     scn_zone = mo.ui.radio({z[0]: z for z in FREE_ZONES}, value=FREE_ZONES[1][0])
@@ -1427,7 +1449,7 @@ def _():
     scn_fixed = mo.ui.dictionary({f[0]: mo.ui.number(start=f[3], stop=f[4], step=f[5], value=f[2], label=f[1], full_width=True)
                                   for f in FIXED_FIELDS})
     scn_ov_preset, scn_ov_left, scn_ov_right = overlay_widgets()
-    return (SCN_MODELS, scn_fixed, get_saved, get_scn_bands, get_scn_config, get_scn_tab, scn_delay, scn_model, scn_ov_left, scn_ov_preset,
+    return (SCN_MODELS, scn_beta, scn_fixed, scn_kind, scn_until, get_saved, get_scn_bands, get_scn_config, get_scn_tab, scn_delay, scn_model, scn_ov_left, scn_ov_preset,
             scn_ov_right, scn_period, scn_red, scn_type, scn_view, scn_zone, set_saved, set_scn_bands, set_scn_config,
             set_scn_tab)
 
@@ -1452,8 +1474,11 @@ def _(scn_start, zone):
 @app.cell(hide_code=True)
 def _(
     SCN_MODELS,
+    scn_beta,
     scn_delay,
     scn_fixed,
+    scn_kind,
+    scn_until,
     scn_dur,
     scn_model,
     scn_period,
@@ -1468,13 +1493,18 @@ def _(
     # every new run starts without the Bayesian band.
     def _run(clicks):
         kind = scn_type.value
-        if kind == "baseline":
+        if scn_kind.value == "pro":
+            days = (scn_until.value - day_date(LAST_DAY)).days
+            scn = ("prospective", days, scn_beta.value)
+        elif kind == "baseline":
             scn = None
         elif kind == "lockdown":
             scn = ("lockdown", start_day, scn_dur.value if scn_dur is not None else 1, scn_red.value)
         else:
             scn = ("school", scn_delay.value)
         a, b = scn_period.value
+        if scn and scn[0] == "prospective":
+            a, b = day_date(PROJECTION_PLOT_START), scn_until.value
         fixed = tuple(sorted((k, float(v)) for k, v in scn_fixed.value.items()
                              if v is not None and float(v) != FIXED_DEFAULTS[k]))
         set_scn_config((SCN_MODELS[scn_model.value], scn, ((a - DAY0.date()).days, (b - DAY0.date()).days), fixed))
@@ -1490,9 +1520,12 @@ def _(
 def _(
     max_dur,
     mode,
+    scn_beta,
     scn_delay,
     scn_dur,
     scn_fixed,
+    scn_kind,
+    scn_until,
     scn_model,
     scn_period,
     scn_red,
@@ -1534,8 +1567,22 @@ def _(
               <strong>{fmt_date(day_to_time(SCHOOL_CP + scn_delay.value))}</strong>.</p></div>"""
         else:
             _extra = '<p class="small">The fitted model as it is, with no counterfactual change.</p>'
-        _body = (f'<div class="stack">{field(f"{scn_model}", "Model")}{field(f"{scn_type}", "Scenario")}{_extra}'
-                 f'{field(f"{scn_period}", "Period to show")}<div class="run-wrap">{scn_run}</div></div>')
+        _kind = field(f"{scn_kind}", "Type of scenario",
+                      "Retrospective: what if 2020 had gone differently. Prospective: what comes after the data.")
+        if scn_kind.value == "pro":
+            _days = (scn_until.value - day_date(LAST_DAY)).days
+            _pro = f"""<div class="box">
+              <p>The model continues from its fitted state on <strong>31/12/2020</strong>. From 01/01/2021 the transmission
+              rate β is the one fitted for the last period (from 06/11/2020), changed by the percentage below.</p>
+              {field(f"{scn_until}", "Simulate until", "At most 3 months, up to 31/03/2021.")}
+              {field(f"{scn_beta}", "Change of β from 01/01/2021 (%)", "Negative: less transmission; positive: more.")}
+              <p class="ink">Projection of <strong>{_days} days</strong>, from 01/01/2021 to
+              <strong>{fmt_date(day_to_time(LAST_DAY + _days))}</strong>.</p></div>"""
+            _body = (f'<div class="stack">{_kind}{field(f"{scn_model}", "Model")}{_pro}'
+                     f'<div class="run-wrap">{scn_run}</div></div>')
+        else:
+            _body = (f'<div class="stack">{_kind}{field(f"{scn_model}", "Model")}{field(f"{scn_type}", "Scenario")}{_extra}'
+                     f'{field(f"{scn_period}", "Period to show")}<div class="run-wrap">{scn_run}</div></div>')
         _out = page(mode, card(_body, "Set up a scenario", "Simulated values only, on top of each model's fitted transmission.",
                                "flask-conical", accent=True), "side")
     _out
@@ -1610,13 +1657,17 @@ def _(
     def results(config):
         model, scn, period, fixed = config
         tr = run_scenario(model, scn, fixed)
-        times = [day_to_time(d) for d in range(N_DAYS)]
+        times = [day_to_time(d) for d in range(len(tr["cases"]))]
         start, end = times[period[0]], times[period[1]]
         window = scenario_window(scn)
         title = scenario_title(model, scn, fixed)
         inp = load("sim_inputs")[model]
         b4, b5 = inp["betas"][3], inp["betas"][4]
         bands_available = model == "age_point" and scn is None and not fixed
+        projection_note = ""
+        if scn and scn[0] == "prospective":
+            projection_note = (f" From 01/01/2021, β = {b5 * (1 + scn[2] / 100):.4f}. The hospitalisation probability ψ is "
+                               "kept at its last fitted value: the 2021 age mix of cases and testing volume are not used.")
         bands = baseline_bands() if bands_available and get_scn_bands() else None
         metrics = compute_metrics(times, tr, times, tr["Rt"], start, end)
 
@@ -1661,7 +1712,7 @@ def _(
           <div><div class="result-head"><h2>{title}</h2></div>
           <p class="small" style="font-size:13px;margin-top:4px">Period: {fmt_date(start)} – {fmt_date(end)}. Only simulated values
           are shown. For reference, the fitted switch on 06/11/2020 already reduces β by {100 * (1 - b5 / b4):.0f}% in this model
-          (β₄ = {b4:.4f} → β₅ = {b5:.4f}).</p></div>
+          (β₄ = {b4:.4f} → β₅ = {b5:.4f}).{projection_note}</p></div>
           <div class="soft-panel" style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px">
             <div style="flex:1;min-width:220px">{field(f"{scn_name}", "Name for this simulation")}</div><div class="save-wrap">{scn_save}</div></div>
           <div class="soft-panel">{scn_bands}<span class="hint-under">{band_hint}</span></div>
