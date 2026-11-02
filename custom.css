@@ -268,3 +268,5 @@ sup { font-size: 10px; color: var(--eu-primary); margin-left: 1px; }
 /* Download buttons: marimo draws them light grey on the dark page; invert
    them to a dark button with light text, and scale them up. */
 .dl-wrap { zoom: 1.25; filter: invert(1) hue-rotate(180deg) brightness(2.1); }
+/* % change under a total in the comparison table */
+.cell-note { display: block; font-size: 11.5px; font-weight: 500; white-space: nowrap; }

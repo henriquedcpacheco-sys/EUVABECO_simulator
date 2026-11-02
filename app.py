@@ -1726,19 +1726,20 @@ def _(cmp_chosen, cmp_drop, cmp_remove, cmp_series, get_saved, get_scn_tab, mode
             ms = [compute_metrics(s["times"], s["data"], s["times"], s["data"]["Rt"], s["times"][0], s["times"][-1]) for s in items]
             ref = ms[0]
 
-            def pct(v, r):
-                if r == 0:
-                    return "—"
+            def with_change(v, r, first):
+                """The total, with its % change relative to the first simulation underneath."""
+                if first or r == 0:
+                    return fmt_int(v)
                 d = 100 * (v / r - 1)
                 cls = "muted" if abs(d) < 0.05 else ("pos" if d < 0 else "neg")
-                return f'<span class="{cls}">{"+" if d > 0 else ""}{d:.1f}%</span>'
+                return f'{fmt_int(v)}<span class="cell-note {cls}">{"+" if d > 0 else ""}{d:.1f}% vs first</span>'
 
             rows = []
-            for s, m in zip(items, ms):
+            for i, (s, m) in enumerate(zip(items, ms)):
                 peak = (m["rt_max"], m["rt_day"]) if is_rt else m["peaks"][series]
                 rows.append(dict(name=s["name"], period=f"{fmt_date(s['times'][0])} – {fmt_date(s['times'][-1])}",
-                                 cases=fmt_int(m["cases"]), dc=pct(m["cases"], ref["cases"]),
-                                 deaths=fmt_int(m["deaths"]), dd=pct(m["deaths"], ref["deaths"]),
+                                 cases=with_change(m["cases"], ref["cases"], i == 0),
+                                 deaths=with_change(m["deaths"], ref["deaths"], i == 0),
                                  peak=fmt_num(peak[0], 2) if is_rt else fmt_int(peak[0]), day=fmt_date(peak[1])))
             csv_rows = [[iso(t), *[round(s["data"][k][i], 4) for k in SERIES], round(s["data"]["Rt"][i], 5), s["name"]]
                         for s in items for i, t in enumerate(s["times"])]
@@ -1750,8 +1751,8 @@ def _(cmp_chosen, cmp_drop, cmp_remove, cmp_series, get_saved, get_scn_tab, mode
               {chart_card(chart(fig, 380 + 20 * len(items)))}
               <div><h4 class="sec">Summary <span class="muted" style="font-weight:400">(differences relative to
               <strong>{items[0]["name"]}</strong>)</span></h4>
-              {table([("name", "Simulation", "b"), ("period", "Period", "nw soft"), ("cases", "Total cases", "r"), ("dc", "vs first", "r"),
-                      ("deaths", "Total deaths", "r"), ("dd", "vs first", "r"),
+              {table([("name", "Simulation", "b"), ("period", "Period", "nw soft"), ("cases", "Total cases", "r"),
+                      ("deaths", "Total deaths", "r"),
                       ("peak", "Highest Rₜ" if is_rt else f"Peak {label}", "r"), ("day", "Peak day", "r")], rows)}</div>
               <div class="soft-panel"><div class="field-label">Download the selected simulations</div>
               <div class="dl-wrap" style="display:flex;flex-wrap:wrap;gap:8px">{dl_csv}{dl_plot}</div></div>"""
