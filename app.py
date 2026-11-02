@@ -1111,8 +1111,9 @@ def _(
         return f"""<details class="exp"><summary><span class="ic">{icon("info")}</span>How the posterior was sampled and the two bands obtained<span class="chev">{icon("chevron-down")}</span></summary>
           <div class="in prose">
           <p>A short pilot chain first tunes the sampler; three longer chains (one started at the least-squares estimate, two
-          started well away from it) are then run and pooled once they agree. The sampling accounts for the autocorrelation of
-          the daily residuals: consecutive days tend to share the same deviation from the model.</p>
+          started well away from it) are then run and pooled once they agree. The fitting is done on the effective sample size
+          of the time series: consecutive days tend to share the same deviation from the model, so the data carry fewer
+          independent observations than the raw number of days.</p>
           <p>500 parameter sets were taken from the chain, spread evenly over the pooled chains, and are used to build both bands.</p>
           <div class="cols2">
             <div><h4>95% credible interval: uncertainty in the model curve</h4><ul>
