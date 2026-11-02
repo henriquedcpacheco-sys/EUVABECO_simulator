@@ -254,3 +254,8 @@ details.dlg .modal { pointer-events: auto; text-align: left; white-space: normal
    when marimo raises a hovered cell. */
 #App .marimo-cell:has(.hero) { z-index: 1 !important; }
 #App .marimo-cell:has(.modes-wrap) { z-index: 30 !important; }
+
+/* References under the fixed-parameter table */
+ol.refs { list-style: decimal !important; margin: 12px 0 0; padding-left: 1.3rem; font-size: 12px; line-height: 1.5; color: var(--eu-muted); }
+ol.refs li { margin: 2px 0; }
+sup { font-size: 10px; color: var(--eu-primary); margin-left: 1px; }

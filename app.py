@@ -96,16 +96,41 @@ with app.setup:
         ("Second state of emergency", "2020-11-04", "2020-11-06", 2),
     ]
 
+    # (parameter, meaning, numbers of its references in FIXED_REFS)
     FIXED_PARAMS = [
-        ("σ = 1/6 per day", "Incubation rate (latent period 6 days)"),
-        ("γ_C = 1/2 per day", "Confirmation rate (2 days infectious before confirmation)"),
-        ("γ_I = 1/5 per day", "Exit rate of the confirmed infectious stage"),
-        ("α = 1/7 per day", "Exit rate of the non-hospitalised compartment"),
-        ("γ_H = 1/9 per day", "Ward discharge rate"),
-        ("γ_ICU = 1/20 per day", "ICU discharge rate"),
-        ("φ_q = 0.002", "Fatality probability outside hospital"),
-        ("N = 10 000 000", "Population"),
-        ("I₀ = 1", "Initial infectious individuals"),
+        ("σ = 1/6 per day", "Incubation rate (latent period 6 days)", [1]),
+        ("γ_C = 1/2 per day", "Confirmation rate (2 days infectious before confirmation)", [3]),
+        ("γ_I = 1/5 per day", "Exit rate of the confirmed infectious stage", [1]),
+        ("α = 1/7 per day", "Exit rate of the non-hospitalised compartment", [1]),
+        ("γ_H = 1/9 per day", "Ward discharge rate", [2]),
+        ("γ_ICU = 1/20 per day", "ICU discharge rate", [2]),
+        ("φ_q = 0.002", "Fatality probability outside hospital", []),
+        ("N = 10 000 000", "Population", []),
+        ("I₀ = 1", "Initial infectious individuals", []),
+    ]
+    # Fixed parameters a user can change in the scenario simulator:
+    # (key, label, literature value, min, max, step); durations in days.
+    FIXED_FIELDS = [
+        ("latent", "Latent period 1/σ (days)", 6.0, 1.0, 20.0, 0.5),
+        ("pre_conf", "Infectious before confirmation 1/γ_C (days)", 2.0, 0.5, 10.0, 0.5),
+        ("post_conf", "Infectious after confirmation 1/γ_I (days)", 5.0, 0.5, 15.0, 0.5),
+        ("home", "Non-hospitalised stage 1/α (days)", 7.0, 1.0, 30.0, 0.5),
+        ("ward", "Ward stay 1/γ_H (days)", 9.0, 1.0, 40.0, 0.5),
+        ("icu", "ICU stay 1/γ_ICU (days)", 20.0, 1.0, 60.0, 0.5),
+        ("phi_q", "Fatality probability outside hospital φ_q", 0.002, 0.0, 0.05, 0.0005),
+        ("N", "Population N", 10_000_000.0, 1_000_000.0, 20_000_000.0, 100_000.0),
+        ("I0", "Initial infectious individuals I₀", 1.0, 0.0, 1000.0, 1.0),
+    ]
+    FIXED_DEFAULTS = {f[0]: f[2] for f in FIXED_FIELDS}
+    FIXED_REFS = [
+        ('C. Dings et al., Model-based analysis of SARS-CoV-2 infections, hospitalization and outcome in Germany, '
+         'the federal states and districts. <i>Viruses</i> 14(10):2114, 2022.', "https://doi.org/10.3390/v14102114"),
+        ('C. Caetano, M. L. Morgado, P. Patrício, J. F. Pereira and B. Nunes, Mathematical modelling of the impact of '
+         'non-pharmacological strategies to control the COVID-19 epidemic in Portugal. <i>Mathematics</i> 9(10):1084, 2021.',
+         "https://doi.org/10.3390/math9101084"),
+        ('Y.-S. Won, J.-H. Kim, C.-Y. Ahn and H. Lee, Subcritical transmission in the early stage of COVID-19 in Korea. '
+         '<i>International Journal of Environmental Research and Public Health</i> 18(3):1265, 2021.',
+         "https://doi.org/10.3390/ijerph18031265"),
     ]
     ESTIMATED_PARAMS = [
         ("β (β₁…β₅)", "Transmission rate, one value per period between NPI dates"),
@@ -131,6 +156,11 @@ with app.setup:
 
     # model picker label -> model key, as used by the fit modes
     MODEL_BY_LABEL = {model_label(v[0], v[2]): k for k, v in MODEL_OPTIONS.items()}
+    # how each model is fitted to the data
+    METHOD_BY_LABEL = {
+        model_label("Nonlinear least squares", "One best-fitting value for each parameter"): "lsq",
+        model_label("Bayesian inference (MCMC)", "A posterior distribution for each parameter, with 95% bands"): "bayes",
+    }
     POINT_KEY = {"sim_m1": "sim_m1", "sim_m2": "sim_m2", "age_nocorr": "age_nocorr", "age_3b": "age_point"}
     BAYES_KEY = {"sim_m1": "sim_m1_bayes", "sim_m2": "sim_m2_bayes",
                  "age_nocorr": "age_nocorr_bayes", "age_3b": "age_bayes"}
@@ -317,15 +347,19 @@ def school_schedule(betas, delay: int) -> list:
 
 
 @app.function
-def simulate(inp: dict, schedule: list, n: int = 1) -> dict:
+def simulate(inp: dict, schedule: list, n: int = 1, fixed: dict | None = None) -> dict:
     """Integrate days 0..305. With n > 1 every input (betas, theta, ..., psi)
-    holds one value per parameter set, and all n sets run at once.
+    holds one value per parameter set, and all n sets run at once. `fixed`
+    overrides the literature values of the fixed parameters (FIXED_FIELDS).
     Returns daily cases, ward, icu, deaths and Rt, each of shape (N_DAYS, n)."""
+    fx = {**FIXED_DEFAULTS, **(fixed or {})}
+    SIG, GC, GI, ALPHA = 1 / fx["latent"], 1 / fx["pre_conf"], 1 / fx["post_conf"], 1 / fx["home"]
+    GH, GICU, PHIQ, N_POP = 1 / fx["ward"], 1 / fx["icu"], fx["phi_q"], fx["N"]
     theta, phi_h, phi_c = (np.broadcast_to(np.asarray(inp[k], float), (n,)) for k in ("theta", "phi_h", "phi_c"))
     psi = np.asarray(inp["psi"], float).reshape(N_DAYS, -1)
     f0 = (1 / GC) / (1 / GC + 1 / GI)
     E0 = np.broadcast_to(np.asarray(inp["E0"], float), (n,))
-    I0 = np.broadcast_to(np.asarray(inp["I0"], float), (n,))
+    I0 = np.broadcast_to(np.asarray(fx["I0"], float), (n,))
     y = np.zeros((10, n))
     y[0], y[1], y[2], y[3] = N_POP - E0 - I0, E0, I0 * f0, I0 * (1 - f0)
     out = np.zeros((N_DAYS, 10, n))
@@ -367,15 +401,16 @@ def simulate(inp: dict, schedule: list, n: int = 1) -> dict:
         "ward": out[:, 5],
         "icu": out[:, 6],
         "deaths": np.maximum(np.diff(D, axis=0, prepend=0.0), 0),
-        "Rt": beta_day * TOTINF * out[:, 0] / N_POP,
+        "Rt": beta_day * (1 / GC + 1 / GI) * out[:, 0] / N_POP,
     }
 
 
 @app.function
 @cache
-def run_scenario(model: str, scn: tuple | None) -> dict:
+def run_scenario(model: str, scn: tuple | None, fixed: tuple = ()) -> dict:
     """One scenario run, as plain lists. scn: None (baseline),
-    ("lockdown", start, duration, reduction %) or ("school", delay)."""
+    ("lockdown", start, duration, reduction %) or ("school", delay);
+    fixed: ((name, value), ...) changes to the fixed parameters."""
     inp = load("sim_inputs")[model]
     if scn is None:
         sched = fitted_schedule(inp["betas"])
@@ -383,7 +418,7 @@ def run_scenario(model: str, scn: tuple | None) -> dict:
         sched = lockdown_schedule(inp["betas"], scn[1], scn[2], scn[3] / 100)
     else:
         sched = school_schedule(inp["betas"], scn[1])
-    tr = simulate(inp, sched)
+    tr = simulate(inp, sched, fixed=dict(fixed))
     return {k: v[:, 0].tolist() for k, v in tr.items()}
 
 
@@ -908,37 +943,37 @@ def _(mode):
     _ = mode
     observed = load("observed")
     obs_times = [day_to_time(iso_to_day(observed["start"]) + i) for i in range(observed["n"])]
-    get_fit_ran, set_fit_ran = mo.state(None)                       # model key of the last run
+    get_fit_ran, set_fit_ran = mo.state(None)                       # (model, method) of the last run
     get_fit_tab, set_fit_tab = mo.state("Data and fixed dates")     # open tab
-    get_fit_bands, set_fit_bands = mo.state((False, False))         # (credible band on, predictive band on)
+    get_fit_bands, set_fit_bands = mo.state((True, True))           # Bayesian: (credible band shown, predictive band shown)
 
     fit_model = mo.ui.tabs({k: "" for k in MODEL_BY_LABEL}, orientation="vertical")
+    fit_method = mo.ui.tabs({k: "" for k in METHOD_BY_LABEL}, orientation="vertical")
     _first, _last = (datetime.fromtimestamp(t / 1000, tz=timezone.utc).date() for t in (obs_times[0], obs_times[-1]))
     fit_period = mo.ui.date_range(start=_first, stop=_last, value=(_first, _last), full_width=True)
 
     def _run(clicks):
-        # Always the least-squares fit first, bands off, Fitted model tab open.
-        if fit_model.value:
-            set_fit_ran(POINT_KEY[MODEL_BY_LABEL[fit_model.value]])
-            set_fit_bands((False, False))
+        # Show the chosen model fitted with the chosen method, both bands on.
+        if fit_model.value and fit_method.value:
+            set_fit_ran((MODEL_BY_LABEL[fit_model.value], METHOD_BY_LABEL[fit_method.value]))
+            set_fit_bands((True, True))
             set_fit_tab("Fitted model")
         return clicks + 1
 
     fit_run = mo.ui.button(label="▶  Run model fitting", value=0, on_click=_run, kind="success", full_width=True)
-    fit_view = mo.ui.radio(["Fit", "Fit quality", "Parameters", "Rₜ", "Epidemic metrics", "Overlay"], value="Fit", inline=True)
     fit_ov_preset, fit_ov_left, fit_ov_right = overlay_widgets()
-    return (fit_model, fit_ov_left, fit_ov_preset, fit_ov_right, fit_period, fit_run, fit_view, get_fit_bands,
+    return (fit_method, fit_model, fit_ov_left, fit_ov_preset, fit_ov_right, fit_period, fit_run, get_fit_bands,
             get_fit_ran, get_fit_tab, obs_times, observed, set_fit_bands, set_fit_tab)
 
 
 @app.cell(hide_code=True)
 def _(get_fit_bands, get_fit_tab, set_fit_bands, set_fit_tab):
-    # Tab bar and bands switch follow the state, so a run can reset them.
+    # Tab bar and band switches follow the state, so a run can reset them.
     fit_tabs = mo.ui.tabs({"Data and fixed dates": "", "Parameters": "", "Fitted model": ""},
                           value=get_fit_tab(), on_change=set_fit_tab)
-    # One switch per Bayesian band; either one on shows the MCMC posterior,
-    # both off shows the least-squares fit. (Each switch needs a name of its own:
-    # marimo only reacts to widgets kept in global variables.)
+    # Bayesian results: one switch per band, to show or hide it. (Each switch
+    # needs a name of its own: marimo only reacts to widgets kept in global
+    # variables.)
     _cred, _pred = get_fit_bands()
     fit_cred_switch = mo.ui.switch(value=_cred, label="**95% credible interval**",
                                    on_change=lambda v: set_fit_bands((v, get_fit_bands()[1])))
@@ -949,7 +984,17 @@ def _(get_fit_bands, get_fit_tab, set_fit_bands, set_fit_tab):
 
 
 @app.cell(hide_code=True)
-def _(fit_model, fit_period, fit_run, mode):
+def _(get_fit_ran):
+    # Views of a result; a Bayesian run adds the posterior distributions.
+    _views = ["Fit", "Fit quality", "Parameters", "Rₜ", "Epidemic metrics", "Overlay"]
+    if get_fit_ran() and get_fit_ran()[1] == "bayes":
+        _views.insert(3, "Posterior distributions")
+    fit_view = mo.ui.radio(_views, value="Fit", inline=True)
+    return (fit_view,)
+
+
+@app.cell(hide_code=True)
+def _(fit_method, fit_model, fit_period, fit_run, mode):
     # Left column of the fit modes
     _out = None
     if mode in ("early", "partial"):
@@ -958,8 +1003,11 @@ def _(fit_model, fit_period, fit_run, mode):
             _period = field(f"{fit_period}", "Period to display",
                             "All models were fitted on 1 March – 31 December 2020. This selects the window shown in every plot.")
         _hint = "The models differ in how the hospitalisation probability ψ is constructed."
-        _body = f'<div class="stack">{_period}{field(f"{fit_model}", "Model", _hint)}<div class="run-wrap">{fit_run}</div></div>'
-        _sub = "Choose the period and a model." if mode == "partial" else "1 March – 31 December 2020. Choose a model."
+        _method_hint = "How the model is fitted to the four daily series."
+        _body = (f'<div class="stack">{_period}{field(f"{fit_model}", "Model", _hint)}'
+                 f'{field(f"{fit_method}", "Fitting method", _method_hint)}<div class="run-wrap">{fit_run}</div></div>')
+        _sub = ("Choose the period, a model and a fitting method." if mode == "partial"
+                else "1 March – 31 December 2020. Choose a model and a fitting method.")
         _out = page(mode, card(_body, "Set up the fit", _sub, "sliders-horizontal", accent=True), "side")
     _out
     return
@@ -974,6 +1022,7 @@ def _(fit_tabs, mode):
 @app.cell(hide_code=True)
 def _(
     fit_bands,
+    fit_method,
     fit_model,
     fit_ov_left,
     fit_ov_preset,
@@ -1015,7 +1064,12 @@ def _(
 
     def params_tab(model):
         cols = [("p", "Parameter", "nw b"), ("m", "Meaning")]
-        fixed = table(cols, [dict(p=p, m=m) for p, m in FIXED_PARAMS], dense=True)
+        fixed = table(cols, [dict(p=p, m=m + "".join(f"<sup>{r}</sup>" for r in refs)) for p, m, refs in FIXED_PARAMS],
+                      dense=True)
+        fixed += ('<ol class="refs">' + "".join(f'<li>{text} <a href="{url}" target="_blank" rel="noreferrer">{url[16:]}</a></li>'
+                                                for text, url in FIXED_REFS) + "</ol>"
+                  '<p class="small" style="margin-top:10px">To try other values for these parameters, use '
+                  '<strong>Transmission scenarios → Fixed parameters</strong>.</p>')
         est = table(cols, [dict(p=p, m=m) for p, m in ESTIMATED_PARAMS], dense=True)
         note = callout("info", AGE_PARAM_NOTES[model]) if model in AGE_PARAM_NOTES else ""
         return f"""<div class="stack">
@@ -1057,9 +1111,8 @@ def _(
         return f"""<details class="exp"><summary><span class="ic">{icon("info")}</span>How the posterior was sampled and the two bands obtained<span class="chev">{icon("chevron-down")}</span></summary>
           <div class="in prose">
           <p>A short pilot chain first tunes the sampler; three longer chains (one started at the least-squares estimate, two
-          started well away from it) are then run and pooled once they agree. The fitting is done on the effective sample size
-          of the time series: consecutive days tend to share the same deviation from the model, so the data carry fewer
-          independent observations than the raw number of days.</p>
+          started well away from it) are then run and pooled once they agree. The sampling accounts for the autocorrelation of
+          the daily residuals: consecutive days tend to share the same deviation from the model.</p>
           <p>500 parameter sets were taken from the chain, spread evenly over the pooled chains, and are used to build both bands.</p>
           <div class="cols2">
             <div><h4>95% credible interval: uncertainty in the model curve</h4><ul>
@@ -1252,6 +1305,11 @@ def _(
                                   ("window", CT["window"], "95% CI")]) + hists)
             else:
                 body = table([("name", "Parameter", "b nw"), ("value", "Estimate", "r"), ("meaning", "Meaning", "soft")], param_rows)
+        elif view == "Posterior distributions":
+            body = (legend([("band-light", CT["obs"], f"Histogram of {fit['nDraws']} posterior draws, evenly spaced over the pooled chains"),
+                            ("line", CT["window"], "Posterior mean"), ("dash", CT["text"], "Least-squares estimate"),
+                            ("window", CT["window"], "95% CI")])
+                    + panel_grid([chart_card(chart(f, 200)) for f in hist_figs], cols=4))
         elif view == "Rₜ":
             body = card(chart(rt_fig, 300), "Effective reproduction number",
                         "Rₜ = β(t)(1/γ_C + 1/γ_I) · S(t)/N.  Rₜ > 1: the epidemic grows. Rₜ < 1: the epidemic shrinks.")
@@ -1266,27 +1324,26 @@ def _(
                         f"{chart(ov_fig, 360)}{note}</div>", "Overlay",
                         "Compare two simulated series on the same time axis, each with its own y-axis, so that their different "
                         "scales do not matter.")
-        hint = ('<span class="hint-under">Turn on either band, or both, to switch from the least-squares point estimates to the '
-                'Bayesian posterior (MCMC): the bands, the model at the posterior-mean parameters, and the posterior of every '
-                'parameter. With both off, the least-squares fit is shown.</span>')
+        bands_panel = (f'<div class="soft-panel">{fit_bands}<span class="hint-under">Show or hide each 95% band in the '
+                       'plots.</span></div>' if bayes else "")
         return f"""<div class="stack">
           <div class="result-head"><div><h2>{label}</h2><p>{fmt_date(start)} – {fmt_date(end)}</p></div>{download}</div>
-          <div class="soft-panel">{fit_bands}{hint}</div>
+          {bands_panel}
           <div>{fit_view}</div>
           <div class="stack">{body}</div></div>"""
 
-    def fitted_tab(model, ran, start, end):
-        out = age_note(model, ran is None or ran != POINT_KEY.get(model)) if model in ("age_nocorr", "age_3b") else ""
+    def fitted_tab(model, method, ran, start, end):
+        out = age_note(model, ran != (model, method)) if model in ("age_nocorr", "age_3b") else ""
         if model is None:
             out += empty_state("arrow-left", "Pick a model",
                                "Choose one of the four models, then press <strong>Run model fitting</strong>. The table below "
                                "compares the Error J of every model.") + models_at_a_glance()
-        elif ran != POINT_KEY[model]:
+        elif ran != (model, method):
             out += empty_state("play", "Ready to run", "Press <strong>Run model fitting</strong> to see the fitted result. "
                                "The table below compares the Error J of every model.") + models_at_a_glance()
         else:
-            bayes = any(get_fit_bands())
-            out += result(model, BAYES_KEY[model] if bayes else ran, bayes, start, end)
+            bayes = method == "bayes"
+            out += result(model, BAYES_KEY[model] if bayes else POINT_KEY[model], bayes, start, end)
         return f'<div class="stack">{out}</div>'
 
     _out = None
@@ -1304,7 +1361,8 @@ def _(
         elif _tab == "Parameters":
             _html = params_tab(MODEL_BY_LABEL.get(fit_model.value))
         else:
-            _html = fitted_tab(MODEL_BY_LABEL.get(fit_model.value), get_fit_ran(), _start, _end)
+            _html = fitted_tab(MODEL_BY_LABEL.get(fit_model.value), METHOD_BY_LABEL.get(fit_method.value),
+                               get_fit_ran(), _start, _end)
         _out = page(mode, f'<div style="margin-top:20px">{_html}</div>')
     _out
     return
@@ -1314,14 +1372,16 @@ def _(
 # Mode 3: transmission scenarios
 # =========================================================================
 @app.function
-def scenario_title(model: str, scn: tuple | None) -> str:
+def scenario_title(model: str, scn: tuple | None, fixed: tuple = ()) -> str:
     short = {"sim_m1": "Model 1", "sim_m2": "Model 2", "age_nocorr": "Model 3a", "age_point": "Model 3b"}[model]
     if scn is None:
-        return f"{short} · Baseline"
-    if scn[0] == "lockdown":
-        return f"{short} · Extra lockdown from {fmt_date(day_to_time(scn[1]))}, {scn[2]} days, Rₜ −{scn[3]}%"
-    return (f"{short} · School reopening delayed to {fmt_date(day_to_time(SCHOOL_CP + scn[1]))} "
-            f"({scn[1]} days later)")
+        title = f"{short} · Baseline"
+    elif scn[0] == "lockdown":
+        title = f"{short} · Extra lockdown from {fmt_date(day_to_time(scn[1]))}, {scn[2]} days, Rₜ −{scn[3]}%"
+    else:
+        title = (f"{short} · School reopening delayed to {fmt_date(day_to_time(SCHOOL_CP + scn[1]))} "
+                 f"({scn[1]} days later)")
+    return title + (" · other fixed parameters" if fixed else "")
 
 
 @app.function
@@ -1357,8 +1417,10 @@ def _():
     scn_period = mo.ui.date_range(start=day_date(0), stop=day_date(N_DAYS - 1),
                                   value=(day_date(0), day_date(N_DAYS - 1)), full_width=True)
     scn_view = mo.ui.radio(["Plots", "Epidemic metrics", "Overlay"], value="Plots", inline=True)
+    scn_fixed = mo.ui.dictionary({f[0]: mo.ui.number(start=f[3], stop=f[4], step=f[5], value=f[2], label=f[1], full_width=True)
+                                  for f in FIXED_FIELDS})
     scn_ov_preset, scn_ov_left, scn_ov_right = overlay_widgets()
-    return (SCN_MODELS, get_saved, get_scn_bands, get_scn_config, get_scn_tab, scn_delay, scn_model, scn_ov_left, scn_ov_preset,
+    return (SCN_MODELS, scn_fixed, get_saved, get_scn_bands, get_scn_config, get_scn_tab, scn_delay, scn_model, scn_ov_left, scn_ov_preset,
             scn_ov_right, scn_period, scn_red, scn_type, scn_view, scn_zone, set_saved, set_scn_bands, set_scn_config,
             set_scn_tab)
 
@@ -1384,6 +1446,7 @@ def _(scn_start, zone):
 def _(
     SCN_MODELS,
     scn_delay,
+    scn_fixed,
     scn_dur,
     scn_model,
     scn_period,
@@ -1405,7 +1468,9 @@ def _(
         else:
             scn = ("school", scn_delay.value)
         a, b = scn_period.value
-        set_scn_config((SCN_MODELS[scn_model.value], scn, ((a - DAY0.date()).days, (b - DAY0.date()).days)))
+        fixed = tuple(sorted((k, float(v)) for k, v in scn_fixed.value.items()
+                             if v is not None and float(v) != FIXED_DEFAULTS[k]))
+        set_scn_config((SCN_MODELS[scn_model.value], scn, ((a - DAY0.date()).days, (b - DAY0.date()).days), fixed))
         set_scn_bands(False)
         set_scn_tab("Results")
         return clicks + 1
@@ -1420,6 +1485,7 @@ def _(
     mode,
     scn_delay,
     scn_dur,
+    scn_fixed,
     scn_model,
     scn_period,
     scn_red,
@@ -1462,7 +1528,13 @@ def _(
         else:
             _extra = '<p class="small">The fitted model as it is, with no counterfactual change.</p>'
         _body = (f'<div class="stack">{field(f"{scn_model}", "Model")}{field(f"{scn_type}", "Scenario")}{_extra}'
-                 f'{field(f"{scn_period}", "Period to show")}<div class="run-wrap">{scn_run}</div></div>')
+                 f'{field(f"{scn_period}", "Period to show")}'
+                 f'<details class="exp" style="box-shadow:none"><summary><span class="ic">{icon("lock")}</span>Fixed parameters'
+                 f'<span class="chev">{icon("chevron-down")}</span></summary><div class="in stack-sm">'
+                 f'<p class="small">Propose other values for the parameters taken from the literature. The estimated '
+                 f'parameters stay as fitted.</p>'
+                 + "".join(f"{scn_fixed[f[0]]}" for f in FIXED_FIELDS) + '</div></details>'
+                 f'<div class="run-wrap">{scn_run}</div></div>')
         _out = page(mode, card(_body, "Set up a scenario", "Simulated values only, on top of each model's fitted transmission.",
                                "flask-conical", accent=True), "side")
     _out
@@ -1483,15 +1555,15 @@ def _(get_saved, get_scn_tab, mode, set_scn_tab):
 def _(get_saved, get_scn_bands, get_scn_config, set_saved, set_scn_bands):
     # Controls shown with a result: its name, Save, and the band switch.
     _config = get_scn_config()
-    _available = _config is not None and _config[0] == "age_point" and _config[1] is None
-    scn_name = mo.ui.text(value=scenario_title(*_config[:2]) if _config else "", full_width=True)
+    _available = _config is not None and _config[0] == "age_point" and _config[1] is None and not _config[3]
+    scn_name = mo.ui.text(value=scenario_title(_config[0], _config[1], _config[3]) if _config else "", full_width=True)
     scn_bands = mo.ui.switch(value=get_scn_bands() and _available, disabled=not _available, on_change=set_scn_bands,
                              label=f"**Show 95% Bayesian band ({N_BAND_DRAWS} posterior draws)**")
 
     def _save(clicks):
-        model, scn, period = get_scn_config()
-        tr = run_scenario(model, scn)
-        base = scn_name.value.strip() or scenario_title(model, scn)
+        model, scn, period, fixed = get_scn_config()
+        tr = run_scenario(model, scn, fixed)
+        base = scn_name.value.strip() or scenario_title(model, scn, fixed)
         names = {s["name"] for s in get_saved()}
         final, k = base, 2
         while final in names:
@@ -1522,15 +1594,15 @@ def _(
 ):
     # Results of the last scenario run
     def results(config):
-        model, scn, period = config
-        tr = run_scenario(model, scn)
+        model, scn, period, fixed = config
+        tr = run_scenario(model, scn, fixed)
         times = [day_to_time(d) for d in range(N_DAYS)]
         start, end = times[period[0]], times[period[1]]
         window = scenario_window(scn)
-        title = scenario_title(model, scn)
+        title = scenario_title(model, scn, fixed)
         inp = load("sim_inputs")[model]
         b4, b5 = inp["betas"][3], inp["betas"][4]
-        bands_available = model == "age_point" and scn is None
+        bands_available = model == "age_point" and scn is None and not fixed
         bands = baseline_bands() if bands_available and get_scn_bands() else None
         metrics = compute_metrics(times, tr, times, tr["Rt"], start, end)
 
@@ -1563,7 +1635,12 @@ def _(
                         "Compare two simulated series on the same time axis, each with its own y-axis, so that their "
                         "different scales do not matter.")
         band_hint = ("Integrates 500 posterior draws of Model 3b and adds the fitted observation noise, corrected for residual "
-                     "autocorrelation." if bands_available else "Available for the Model 3b baseline (no counterfactual scenario).")
+                     "autocorrelation." if bands_available else
+                     "Available for the Model 3b baseline (no counterfactual scenario, literature values of the fixed parameters).")
+        if fixed:
+            names = {f[0]: f[1] for f in FIXED_FIELDS}
+            changed = "; ".join(f"{names[k]} = {v:g} (literature: {FIXED_DEFAULTS[k]:g})" for k, v in fixed)
+            band_hint += f"</span><span class='hint-under'><strong>Fixed parameters changed:</strong> {changed}."
         return f"""<div class="stack">
           <div><div class="result-head"><h2>{title}</h2></div>
           <p class="small" style="font-size:13px;margin-top:4px">Period: {fmt_date(start)} – {fmt_date(end)}. Only simulated values
