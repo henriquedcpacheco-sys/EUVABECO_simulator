@@ -1324,7 +1324,7 @@ def _(
         bands_panel = (f'<div class="soft-panel">{fit_bands}<span class="hint-under">Show or hide each 95% band in the '
                        'plots.</span></div>' if bayes else "")
         return f"""<div class="stack">
-          <div class="result-head"><div><h2>{label}</h2><p>{fmt_date(start)} – {fmt_date(end)}</p></div>{download}</div>
+          <div class="result-head"><div><h2>{label}</h2><p>{fmt_date(start)} – {fmt_date(end)}</p></div><div class="dl-wrap">{download}</div></div>
           {bands_panel}
           <div>{fit_view}</div>
           <div class="stack">{body}</div></div>"""
@@ -1565,7 +1565,7 @@ def _(get_saved, get_scn_bands, get_scn_config, scn_fixed, set_saved, set_scn_ba
         mo.status.toast(f"Saved as “{final}”", "Open Compare to compare it with other saved simulations.")
         return clicks + 1
 
-    scn_save = mo.ui.button(label="Save simulation", value=0, on_click=_save)
+    scn_save = mo.ui.button(label="💾  Save simulation", value=0, on_click=_save, kind="success")
 
     def _rerun(clicks):
         # the last scenario again, with the fixed parameters proposed in the results
@@ -1651,7 +1651,7 @@ def _(
           are shown. For reference, the fitted switch on 06/11/2020 already reduces β by {100 * (1 - b5 / b4):.0f}% in this model
           (β₄ = {b4:.4f} → β₅ = {b5:.4f}).</p></div>
           <div class="soft-panel" style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px">
-            <div style="flex:1;min-width:220px">{field(f"{scn_name}", "Name for this simulation")}</div>{scn_save}</div>
+            <div style="flex:1;min-width:220px">{field(f"{scn_name}", "Name for this simulation")}</div><div class="save-wrap">{scn_save}</div></div>
           <div class="soft-panel">{scn_bands}<span class="hint-under">{band_hint}</span></div>
           <details class="exp" {"open" if fixed else ""}><summary><span class="ic">{icon("lock")}</span>Fixed parameters
             <span class="chev">{icon("chevron-down")}</span></summary><div class="in stack-sm">
@@ -1740,7 +1740,8 @@ def _(cmp_chosen, cmp_drop, cmp_remove, cmp_series, get_saved, get_scn_tab, mode
               {table([("name", "Simulation", "b"), ("period", "Period", "nw soft"), ("cases", "Total cases", "r"), ("dc", "vs first", "r"),
                       ("deaths", "Total deaths", "r"), ("dd", "vs first", "r"),
                       ("peak", "Highest Rₜ" if is_rt else f"Peak {label}", "r"), ("day", "Peak day", "r")], rows)}</div>
-              <div style="display:flex;flex-wrap:wrap;gap:8px">{dl_csv}{dl_plot}</div>"""
+              <div class="soft-panel"><div class="field-label">Download the selected simulations</div>
+              <div class="dl-wrap" style="display:flex;flex-wrap:wrap;gap:8px">{dl_csv}{dl_plot}</div></div>"""
         out += f"""<details class="exp"><summary><span class="ic">{icon("trash-2")}</span>Manage saved simulations
           <span class="chev">{icon("chevron-down")}</span></summary><div class="in stack-sm">{cmp_drop}{cmp_remove}</div></details>"""
         return f'<div class="stack">{out}</div>'

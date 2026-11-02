@@ -263,3 +263,8 @@ sup { font-size: 10px; color: var(--eu-primary); margin-left: 1px; }
 /* Fixed-parameter boxes under a scenario result */
 .grid-fixed { display: grid; gap: 10px 20px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 @media (max-width: 1279px) { .grid-fixed { grid-template-columns: minmax(0, 1fr); } }
+/* "Save simulation", scaled up like the run buttons */
+.save-wrap { zoom: 1.25; }
+/* Download buttons: marimo draws them light grey on the dark page; invert
+   them to a dark button with light text, and scale them up. */
+.dl-wrap { zoom: 1.25; filter: invert(1) hue-rotate(180deg) brightness(2.1); }
