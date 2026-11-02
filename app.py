@@ -324,7 +324,7 @@ def fitted_schedule(betas) -> list:
 
 @app.function
 def lockdown_schedule(betas, start: int, duration: int, reduction: float) -> list:
-    """Extra Rt reduction on top of the fitted transmission: from `start`, for
+    """Extra reduction of the transmission rate on top of the fitted one: from `start`, for
     `duration` days, beta(t) is multiplied by (1 - reduction)."""
     end = min(start + duration, N_DAYS - 1)
     bounds = sorted(set(CPS + [start, end]))
@@ -1374,7 +1374,7 @@ def scenario_title(model: str, scn: tuple | None, fixed: tuple = ()) -> str:
     if scn is None:
         title = f"{short} · Baseline"
     elif scn[0] == "lockdown":
-        title = f"{short} · Extra lockdown from {fmt_date(day_to_time(scn[1]))}, {scn[2]} days, Rₜ −{scn[3]}%"
+        title = f"{short} · Extra lockdown from {fmt_date(day_to_time(scn[1]))}, {scn[2]} days, β −{scn[3]}%"
     else:
         title = (f"{short} · School reopening delayed to {fmt_date(day_to_time(SCHOOL_CP + scn[1]))} "
                  f"({scn[1]} days later)")
@@ -1387,7 +1387,7 @@ def scenario_window(scn: tuple | None):
     if scn is None:
         return None
     if scn[0] == "lockdown":
-        return (day_to_time(scn[1]), day_to_time(scn[1] + scn[2]), "Extra Rₜ reduction")
+        return (day_to_time(scn[1]), day_to_time(scn[1] + scn[2]), "Extra β reduction")
     return (day_to_time(SCHOOL_CP), day_to_time(SCHOOL_CP + scn[1]), "School reopening delayed")
 
 
@@ -1499,8 +1499,8 @@ def _(
         _type = scn_type.value
         if _type == "lockdown":
             _dur = scn_dur.value if scn_dur is not None else 1
-            _dur_field = (field(f"{scn_dur}", "Duration of the Rₜ reduction (days)",
-                                "Capped so the window ends before the next real lockdown. Afterwards it is back to the baseline Rₜ.")
+            _dur_field = (field(f"{scn_dur}", "Duration of the β reduction (days)",
+                                "Capped so the window ends before the next real lockdown. Afterwards β is back to its fitted value.")
                           if scn_dur is not None else
                           "<p>Only 1 day of room left before the next real lockdown. Pick an earlier start date for a longer window.</p>")
             _extra = f"""<div class="box">
@@ -1511,8 +1511,8 @@ def _(
               {field(f"{scn_start}", "Extra lockdown start date",
                      f"Any date between {fmt_date(day_to_time(zone[1]))} and {fmt_date(day_to_time(zone[2] - 1))}.")}
               {_dur_field}
-              {field(f"{scn_red}", "Rₜ reduction (%)", "Reduction relative to the baseline Rₜ, inside the window.")}
-              <p class="ink">Rₜ reduced from <strong>{fmt_date(day_to_time(start_day))}</strong> to
+              {field(f"{scn_red}", "β reduction (%)", "Reduction of the fitted transmission rate β, inside the window.")}
+              <p class="ink">β reduced from <strong>{fmt_date(day_to_time(start_day))}</strong> to
               <strong>{fmt_date(day_to_time(min(start_day + _dur, N_DAYS - 1)))}</strong>.</p></div>"""
         elif _type == "school":
             _extra = f"""<div class="box">
@@ -1654,7 +1654,7 @@ def _(
         _config = get_scn_config()
         if _config is None:
             _html = empty_state("arrow-left", "Set up a scenario",
-                                "Choose a model and a scenario: an extra lockdown (start date, duration, Rₜ reduction) or a later "
+                                "Choose a model and a scenario: an extra lockdown (start date, duration, β reduction) or a later "
                                 "school reopening (delay). Then press <strong>Run scenario simulation</strong>. Save the results and "
                                 "open <strong>Compare</strong> to set them against the baseline.")
         else:

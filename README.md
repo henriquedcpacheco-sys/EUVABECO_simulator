@@ -24,8 +24,8 @@ marimo edit app.py         # the notebook, to change the code
    31 December 2020, fitted either by nonlinear least squares or by Bayesian
    inference (MCMC: posterior distributions, 95% credible and predictive bands).
 2. **Modeling partial early dynamics**: the same, for a chosen period.
-3. **Transmission scenarios**: an extra lockdown (Rₜ reduction on top of the
-   fitted transmission, outside the two real lockdowns) or a later school
+3. **Transmission scenarios**: an extra lockdown (reduction of the transmission
+   rate β on top of its fitted value, outside the two real lockdowns) or a later school
    reopening, simulated with the ODE model, optionally with other values of the
    fixed parameters; save runs and compare them. For the
    Model 3b baseline, a toggle adds the 95% band from 500 posterior draws.
