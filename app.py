@@ -1525,13 +1525,7 @@ def _(
         else:
             _extra = '<p class="small">The fitted model as it is, with no counterfactual change.</p>'
         _body = (f'<div class="stack">{field(f"{scn_model}", "Model")}{field(f"{scn_type}", "Scenario")}{_extra}'
-                 f'{field(f"{scn_period}", "Period to show")}'
-                 f'<details class="exp" style="box-shadow:none"><summary><span class="ic">{icon("lock")}</span>Fixed parameters'
-                 f'<span class="chev">{icon("chevron-down")}</span></summary><div class="in stack-sm">'
-                 f'<p class="small">Propose other values for the parameters taken from the literature. The estimated '
-                 f'parameters stay as fitted.</p>'
-                 + "".join(f"{scn_fixed[f[0]]}" for f in FIXED_FIELDS) + '</div></details>'
-                 f'<div class="run-wrap">{scn_run}</div></div>')
+                 f'{field(f"{scn_period}", "Period to show")}<div class="run-wrap">{scn_run}</div></div>')
         _out = page(mode, card(_body, "Set up a scenario", "Simulated values only, on top of each model's fitted transmission.",
                                "flask-conical", accent=True), "side")
     _out
@@ -1549,7 +1543,7 @@ def _(get_saved, get_scn_tab, mode, set_scn_tab):
 
 
 @app.cell(hide_code=True)
-def _(get_saved, get_scn_bands, get_scn_config, set_saved, set_scn_bands):
+def _(get_saved, get_scn_bands, get_scn_config, scn_fixed, set_saved, set_scn_bands, set_scn_config):
     # Controls shown with a result: its name, Save, and the band switch.
     _config = get_scn_config()
     _available = _config is not None and _config[0] == "age_point" and _config[1] is None and not _config[3]
@@ -1572,7 +1566,18 @@ def _(get_saved, get_scn_bands, get_scn_config, set_saved, set_scn_bands):
         return clicks + 1
 
     scn_save = mo.ui.button(label="Save simulation", value=0, on_click=_save)
-    return scn_bands, scn_name, scn_save
+
+    def _rerun(clicks):
+        # the last scenario again, with the fixed parameters proposed in the results
+        model, scn, period, _ = get_scn_config()
+        fixed = tuple(sorted((k, float(v)) for k, v in scn_fixed.value.items()
+                             if v is not None and float(v) != FIXED_DEFAULTS[k]))
+        set_scn_bands(False)
+        set_scn_config((model, scn, period, fixed))
+        return clicks + 1
+
+    scn_rerun = mo.ui.button(label="Re-run with these values", value=0, on_click=_rerun, kind="success")
+    return scn_bands, scn_name, scn_rerun, scn_save
 
 
 @app.cell(hide_code=True)
@@ -1582,10 +1587,12 @@ def _(
     get_scn_tab,
     mode,
     scn_bands,
+    scn_fixed,
     scn_name,
     scn_ov_left,
     scn_ov_preset,
     scn_ov_right,
+    scn_rerun,
     scn_save,
     scn_view,
 ):
@@ -1646,6 +1653,12 @@ def _(
           <div class="soft-panel" style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px">
             <div style="flex:1;min-width:220px">{field(f"{scn_name}", "Name for this simulation")}</div>{scn_save}</div>
           <div class="soft-panel">{scn_bands}<span class="hint-under">{band_hint}</span></div>
+          <details class="exp" {"open" if fixed else ""}><summary><span class="ic">{icon("lock")}</span>Fixed parameters
+            <span class="chev">{icon("chevron-down")}</span></summary><div class="in stack-sm">
+            <p class="small">Propose other values for the parameters taken from the literature and re-run this scenario.
+            The estimated parameters stay as fitted.</p>
+            <div class="grid-fixed">{"".join(f"<div>{scn_fixed[f[0]]}</div>" for f in FIXED_FIELDS)}</div>
+            <div>{scn_rerun}</div></div></details>
           <div>{scn_view}</div>
           <div class="stack">{body}</div></div>"""
 
