@@ -194,6 +194,7 @@ with app.setup:
 
     # Mode 4: the age-stratified models with vaccination, fitted over 2020-2021
     VAX_COLOR = "#ef5b5b"            # start of vaccination (27/12/2020)
+    VAX_STEPS = 10                   # RK4 steps per day in the scenarios with vaccination
     VAX_MODELS = {
         "age_nocorr_vac": ("Model 3a — age-stratified ψ", "Model 3a", "Without testing-volume coupling"),
         "age_point_vac": ("Model 3b — age-stratified ψ", "Model 3b", "With testing-volume coupling"),
@@ -437,6 +438,8 @@ def run_scenario(model: str, scn: tuple | None, fixed: tuple = ()) -> dict:
     ("lockdown", start, duration, reduction %), ("school", delay) or
     ("prospective", days after 31/12/2020, change of beta %); fixed:
     ((name, value), ...) changes to the fixed parameters."""
+    if model in VAX_MODELS:
+        return run_vax_scenario(model, scn, fixed)
     inp = load("sim_inputs")[model]
     n_days = N_DAYS
     if scn is None:
@@ -452,6 +455,104 @@ def run_scenario(model: str, scn: tuple | None, fixed: tuple = ()) -> dict:
         n_days = N_DAYS + days
     tr = simulate(inp, sched, fixed=dict(fixed), n_days=n_days)
     return {k: v[:, 0].tolist() for k, v in tr.items()}
+
+
+# -------------------------------------------------------------------------
+# Models 3a and 3b with vaccination (1 March 2020 - 31 December 2021): the
+# same equations plus the vaccinated susceptibles S_V (Tese/D2/d2_rhs_vax.m).
+# Integrated one day at a time, with that day's beta, psi, v, phi_h and phi_c
+# held constant within the day (RK4, VAX_STEPS steps per day).
+# -------------------------------------------------------------------------
+@app.function
+def vax_info(model: str) -> dict:
+    """Changepoint days, the three lockdowns that happened, the free zones for an
+    extra lockdown and the school switch of a model with vaccination."""
+    d = load("vaccination")
+    cp1, cp2, cp3, cp4, xmas, jan, mar, jul, sep = d["models"][model]["cp_days"]
+    last = d["n"] - 1
+    return dict(
+        n_days=d["n"], last=last, school=cp3, next=cp4,
+        lockdowns=[(cp1, cp2), (cp4, xmas), (jan, mar)],
+        zones=[("Before the spring 2020 lockdown", 0, cp1),
+               ("Between the spring and the November 2020 lockdowns", cp2, cp4),
+               ("Between Christmas 2020 and the January 2021 lockdown", xmas, jan),
+               ("After the January 2021 lockdown", mar, last)],
+        cp_dates=[c["changepoint"] for c in d["changepoints"]],
+        jan_betas=(d["models"][model]["beta"][jan - 2], d["models"][model]["beta"][jan]),
+    )
+
+
+@app.function
+def simulate_vax(model: str, beta_day: list, fixed: dict | None = None) -> dict:
+    d = load("vaccination")
+    md = d["models"][model]
+    fx = {**FIXED_DEFAULTS, **(fixed or {})}
+    SIG, GC, GI, ALPHA = 1 / fx["latent"], 1 / fx["pre_conf"], 1 / fx["post_conf"], 1 / fx["home"]
+    GH, GICU, PHIQ, N = 1 / fx["ward"], 1 / fx["icu"], fx["phi_q"], fx["N"]
+    p_inf, th = d["p_inf"], md["theta"]
+    psi, ph, pc, v = md["psi"], md["phi_h_day"], md["phi_c_day"], d["vaccinated_per_day"]
+    n = len(beta_day)
+    f0 = (1 / GC) / (1 / GC + 1 / GI)
+    E0, I0 = md["E0"], fx["I0"]
+    y = np.zeros(11)
+    y[0], y[1], y[2], y[3] = N - E0 - I0, E0, I0 * f0, I0 * (1 - f0)
+    out = np.zeros((n, 11))
+    out[0] = y
+    h = 1 / VAX_STEPS
+
+    def rhs(y, b, p, vr, phh, phc):
+        S, E, Iuc, Ic, Ti, H, U, R, D, C, SV = y
+        lam = b * (Iuc + Ic) / (S + E + Iuc + Ic + Ti + H + U + R + D + SV)
+        vac = vr * S / (S + E + R)
+        return np.array([
+            -lam * S - vac,
+            lam * S + (1 - p_inf) * lam * SV - SIG * E,
+            SIG * E - GC * Iuc,
+            GC * Iuc - GI * Ic,
+            (1 - p) * GI * Ic - ALPHA * Ti,
+            p * GI * Ic - GH * H,
+            GH * th * H - GICU * U,
+            (1 - PHIQ) * ALPHA * Ti + (1 - phh) * GH * (1 - th) * H + (1 - phc) * GICU * U,
+            PHIQ * ALPHA * Ti + phh * GH * (1 - th) * H + phc * GICU * U,
+            GC * Iuc,
+            -(1 - p_inf) * lam * SV + vac,
+        ])
+
+    for day in range(n - 1):
+        a = (beta_day[day], psi[day], v[day], ph[day], pc[day])
+        for _ in range(VAX_STEPS):
+            k1 = rhs(y, *a)
+            k2 = rhs(y + 0.5 * h * k1, *a)
+            k3 = rhs(y + 0.5 * h * k2, *a)
+            k4 = rhs(y + h * k3, *a)
+            y = y + h / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+        out[day + 1] = y
+    return {
+        "cases": np.maximum(np.diff(out[:, 9], prepend=0.0), 0).tolist(),
+        "ward": out[:, 5].tolist(),
+        "icu": out[:, 6].tolist(),
+        "deaths": np.maximum(np.diff(out[:, 8], prepend=0.0), 0).tolist(),
+        "Rt": (np.asarray(beta_day) * (1 / GC + 1 / GI) * (out[:, 0] + (1 - p_inf) * out[:, 10]) / N).tolist(),
+    }
+
+
+@app.function
+@cache
+def run_vax_scenario(model: str, scn: tuple | None, fixed: tuple = ()) -> dict:
+    """Scenario of a model with vaccination: None (baseline), ("lockdown", start,
+    duration, reduction %) or ("school", delay), on the fitted beta of each day."""
+    md = load("vaccination")["models"][model]
+    info = vax_info(model)
+    beta = list(md["beta"])
+    if scn and scn[0] == "lockdown":
+        start, end = scn[1], min(scn[1] + scn[2], info["last"])
+        for day in range(start, end):
+            beta[day] *= 1 - scn[3] / 100
+    elif scn and scn[0] == "school":
+        b3 = beta[info["school"] - 1]                 # the summer 2020 rate, before the reopening
+        for day in range(info["school"], min(info["school"] + scn[1], info["next"] - 1)):
+            beta[day] = b3
+    return simulate_vax(model, beta, dict(fixed))
 
 
 # =========================================================================
@@ -509,7 +610,8 @@ def marks(start: int, end: int, window: tuple | None = None, rt_line: bool = Fal
         shapes.append(dict(type="line", xref="x", yref="paper", x0=vax, x1=vax, y0=0, y1=1,
                            line=dict(color=VAX_COLOR, width=1.6)))
     if lockdowns:
-        for a, b in REAL_LOCKDOWNS:
+        # True: the two 2020 lockdowns; a list of (first day, end day): those lockdowns
+        for a, b in (lockdowns if isinstance(lockdowns, (list, tuple)) else REAL_LOCKDOWNS):
             a, b = max(day_to_time(a), start), min(day_to_time(b), end)
             if a < b:
                 shapes.append(dict(type="rect", xref="x", yref="paper", x0=iso(a), x1=iso(b), y0=0, y1=1,
@@ -1398,7 +1500,8 @@ def _(
 # =========================================================================
 @app.function
 def scenario_title(model: str, scn: tuple | None, fixed: tuple = ()) -> str:
-    short = {"sim_m1": "Model 1", "sim_m2": "Model 2", "age_nocorr": "Model 3a", "age_point": "Model 3b"}[model]
+    short = {"sim_m1": "Model 1", "sim_m2": "Model 2", "age_nocorr": "Model 3a", "age_point": "Model 3b",
+             "age_nocorr_vac": "Model 3a with vaccination", "age_point_vac": "Model 3b with vaccination"}[model]
     if scn is None:
         title = f"{short} · Baseline"
     elif scn[0] == "lockdown":
@@ -1437,6 +1540,9 @@ def _():
     get_scn_tab, set_scn_tab = mo.state("Results")
     SCN_MODELS = {model_label(MODEL_OPTIONS[c][0], MODEL_OPTIONS[c][2]): v for v, c in
                   [("sim_m1", "sim_m1"), ("sim_m2", "sim_m2"), ("age_nocorr", "age_nocorr"), ("age_point", "age_3b")]}
+    # the age-stratified models with vaccination, 1 March 2020 - 31 December 2021
+    SCN_MODELS.update({model_label(f"{VAX_MODELS[k][1]} — with vaccination", f"{VAX_MODELS[k][2]}, 2020–2021"): k
+                       for k in VAX_MODELS})
     scn_model = mo.ui.tabs({k: "" for k in SCN_MODELS}, orientation="vertical")
     scn_kind = mo.ui.radio({"Retrospective": "retro", "Prospective": "pro"}, value="Retrospective", inline=True)
     scn_until = mo.ui.date(start=day_date(LAST_DAY + 1), stop=day_date(LAST_DAY + MAX_PROJECTION),
@@ -1444,18 +1550,28 @@ def _():
     scn_beta = mo.ui.slider(-90, 100, step=5, value=0, show_value=True, full_width=True)
     scn_type = mo.ui.radio({"Baseline": "baseline", "Extra lockdown": "lockdown", "Later school reopening": "school"},
                            value="Extra lockdown", inline=True)
-    scn_zone = mo.ui.radio({z[0]: z for z in FREE_ZONES}, value=FREE_ZONES[1][0])
     scn_red = mo.ui.slider(5, 90, step=5, value=40, show_value=True, full_width=True)
     scn_delay = mo.ui.slider(1, MAX_SCHOOL_DELAY, value=21, show_value=True, full_width=True)
-    scn_period = mo.ui.date_range(start=day_date(0), stop=day_date(N_DAYS - 1),
-                                  value=(day_date(0), day_date(N_DAYS - 1)), full_width=True)
     scn_view = mo.ui.radio(["Plots", "Epidemic metrics", "Overlay"], value="Plots", inline=True)
     scn_fixed = mo.ui.dictionary({f[0]: mo.ui.number(start=f[3], stop=f[4], step=f[5], value=f[2], label=f[1], full_width=True)
                                   for f in FIXED_FIELDS})
     scn_ov_preset, scn_ov_left, scn_ov_right = overlay_widgets()
     return (SCN_MODELS, scn_beta, scn_fixed, scn_kind, scn_until, get_saved, get_scn_config, get_scn_tab, scn_delay, scn_model, scn_ov_left, scn_ov_preset,
-            scn_ov_right, scn_period, scn_red, scn_type, scn_view, scn_zone, set_saved, set_scn_config,
+            scn_ov_right, scn_red, scn_type, scn_view, set_saved, set_scn_config,
             set_scn_tab)
+
+
+@app.cell(hide_code=True)
+def _(SCN_MODELS, scn_model):
+    # What depends on the model: the models with vaccination run to 31/12/2021, with three
+    # lockdowns that happened (spring 2020, November 2020, January 2021) and four free zones.
+    scn_key = SCN_MODELS.get(scn_model.value, "sim_m1")
+    scn_vinfo = vax_info(scn_key) if scn_key in VAX_MODELS else None
+    _zones = scn_vinfo["zones"] if scn_vinfo else FREE_ZONES
+    _last = scn_vinfo["last"] if scn_vinfo else N_DAYS - 1
+    scn_zone = mo.ui.radio({z[0]: z for z in _zones}, value=_zones[1][0])
+    scn_period = mo.ui.date_range(start=day_date(0), stop=day_date(_last), value=(day_date(0), day_date(_last)), full_width=True)
+    return scn_key, scn_period, scn_vinfo, scn_zone
 
 
 @app.cell(hide_code=True)
@@ -1488,6 +1604,7 @@ def _(
     scn_period,
     scn_red,
     scn_type,
+    scn_vinfo,
     set_scn_config,
     set_scn_tab,
     start_day,
@@ -1495,7 +1612,7 @@ def _(
     # "Run scenario simulation": freeze the current set-up as the run to show.
     def _run(clicks):
         kind = scn_type.value
-        if scn_kind.value == "pro":
+        if scn_kind.value == "pro" and scn_vinfo is None:   # no projection for the models with vaccination
             days = (scn_until.value - day_date(LAST_DAY)).days
             scn = ("prospective", days, scn_beta.value)
         elif kind == "baseline":
@@ -1533,6 +1650,7 @@ def _(
     scn_run,
     scn_start,
     scn_type,
+    scn_vinfo,
     scn_zone,
     start_day,
     zone,
@@ -1541,28 +1659,39 @@ def _(
     _out = None
     if mode == "scenarios":
         _type = scn_type.value
+        _vi = scn_vinfo
+        _last = _vi["last"] if _vi else N_DAYS - 1
+        _next = _vi["next"] if _vi else NEXT_CP
         if _type == "lockdown":
             _dur = scn_dur.value if scn_dur is not None else 1
             _dur_field = (field(f"{scn_dur}", "Duration of the β reduction (days)",
                                 "Capped so the window ends before the next real lockdown. Afterwards β is back to its fitted value.")
                           if scn_dur is not None else
                           "<p>Only 1 day of room left before the next real lockdown. Pick an earlier start date for a longer window.</p>")
+            if _vi:
+                (_a1, _b1), (_a2, _b2), (_a3, _b3) = _vi["lockdowns"]
+                _real = (f"The three real lockdowns stay as fitted: spring 2020 (<strong>{fmt_date(day_to_time(_a1))} – "
+                         f"{fmt_date(day_to_time(_b1))}</strong>), the November 2020 tightening (<strong>{fmt_date(day_to_time(_a2))} – "
+                         f"{fmt_date(day_to_time(_b2))}</strong>, until the Christmas relaxation) and the January 2021 lockdown "
+                         f"(<strong>{fmt_date(day_to_time(_a3))} – {fmt_date(day_to_time(_b3))}</strong>, until deconfinement).")
+            else:
+                _real = (f"The two real lockdowns stay as fitted: spring 2020 (<strong>{fmt_date(day_to_time(FITTED_CP[0]))} – "
+                         f"{fmt_date(day_to_time(FITTED_CP[1]))}</strong>) and the Nov 2020 tightening (from "
+                         f"<strong>{fmt_date(day_to_time(FITTED_CP[3]))}</strong>).")
             _extra = f"""<div class="box">
-              <p>The two real lockdowns stay as fitted: spring 2020 (<strong>{fmt_date(day_to_time(FITTED_CP[0]))} –
-              {fmt_date(day_to_time(FITTED_CP[1]))}</strong>) and the Nov 2020 tightening (from
-              <strong>{fmt_date(day_to_time(FITTED_CP[3]))}</strong>). Place the extra lockdown anywhere else, for any duration.</p>
+              <p>{_real} Place the extra lockdown anywhere else, for any duration.</p>
               {field(f"{scn_zone}", "When")}
               {field(f"{scn_start}", "Extra lockdown start date",
                      f"Any date between {fmt_date(day_to_time(zone[1]))} and {fmt_date(day_to_time(zone[2] - 1))}.")}
               {_dur_field}
               {field(f"{scn_red}", "β reduction (%)", "Reduction of the fitted transmission rate β, inside the window.")}
               <p class="ink">β reduced from <strong>{fmt_date(day_to_time(start_day))}</strong> to
-              <strong>{fmt_date(day_to_time(min(start_day + _dur, N_DAYS - 1)))}</strong>.</p></div>"""
+              <strong>{fmt_date(day_to_time(min(start_day + _dur, _last)))}</strong>.</p></div>"""
         elif _type == "school":
             _extra = f"""<div class="box">
               <p>Schools actually reopened on <strong>{fmt_date(day_to_time(SCHOOL_CP))}</strong>, when β steps up from the
               lower summer level to the higher post-reopening level. Push that switch later, as long as it doesn't reach the
-              next real changepoint, the Nov 2020 tightening on <strong>{fmt_date(day_to_time(NEXT_CP))}</strong>.</p>
+              next real changepoint, the Nov 2020 tightening on <strong>{fmt_date(day_to_time(_next))}</strong>.</p>
               {field(f"{scn_delay}", "Delay school reopening by (days)")}
               <p class="ink">Reopening moved from <strong>{fmt_date(day_to_time(SCHOOL_CP))}</strong> to
               <strong>{fmt_date(day_to_time(SCHOOL_CP + scn_delay.value))}</strong>.</p></div>"""
@@ -1570,7 +1699,10 @@ def _(
             _extra = '<p class="small">The fitted model as it is, with no counterfactual change.</p>'
         _kind = field(f"{scn_kind}", "Type of scenario",
                       "Retrospective: what if 2020 had gone differently. Prospective: what comes after the data.")
-        if scn_kind.value == "pro":
+        if _vi:
+            _kind = field('<p class="small" style="margin:0">Retrospective only: the models with vaccination are fitted '
+                          'up to 31/12/2021, the end of the data.</p>', "Type of scenario")
+        if scn_kind.value == "pro" and not _vi:
             _days = (scn_until.value - day_date(LAST_DAY)).days
             _pro = f"""<div class="box">
               <p>The model continues from its fitted state on <strong>31/12/2020</strong>. From 01/01/2021 the transmission
@@ -1615,7 +1747,8 @@ def _(get_saved, get_scn_config, scn_fixed, set_saved, set_scn_config):
         while final in names:
             final, k = f"{base} ({k})", k + 1
         i0, i1 = period[0], period[1] + 1
-        item = dict(name=final, times=[day_to_time(d) for d in range(i0, i1)], data={k_: v[i0:i1] for k_, v in tr.items()})
+        item = dict(name=final, times=[day_to_time(d) for d in range(i0, i1)], data={k_: v[i0:i1] for k_, v in tr.items()},
+                    vax=model in VAX_MODELS)
         set_saved(lambda saved: saved + [item])
         mo.status.toast(f"Saved as “{final}”", "Open Compare to compare it with other saved simulations.")
         return clicks + 1
@@ -1656,27 +1789,43 @@ def _(
         start, end = times[period[0]], times[period[1]]
         window = scenario_window(scn)
         title = scenario_title(model, scn, fixed)
-        inp = load("sim_inputs")[model]
-        b4, b5 = inp["betas"][3], inp["betas"][4]
+        vi = vax_info(model) if model in VAX_MODELS else None
         projection_note = ""
-        if scn and scn[0] == "prospective":
-            projection_note = (f" From 01/01/2021, β = {b5 * (1 + scn[2] / 100):.4f}. The hospitalisation probability ψ is "
-                               "kept at its last fitted value: the 2021 age mix of cases and testing volume are not used.")
+        if vi:
+            j0, j1 = vi["jan_betas"]
+            (a1, b1), (a2, b2), (a3, b3) = vi["lockdowns"]
+            ref_note = (f"For reference, the January 2021 lockdown already reduces β by {100 * (1 - j1 / j0):.0f}% in this model "
+                        f"(β₆ = {j0:.4f} → β₇ = {j1:.4f}). Vaccination, the age mix of cases and the testing volume follow the data.")
+            lock_list, cp_dates, vax_line = vi["lockdowns"], vi["cp_dates"], load("vaccination")["vaccination_start"]
+            lock_text = (f"Lockdowns that happened ({fmt_date(day_to_time(a1))} – {fmt_date(day_to_time(b1))}, "
+                         f"{fmt_date(day_to_time(a2))} – {fmt_date(day_to_time(b2))}, {fmt_date(day_to_time(a3))} – {fmt_date(day_to_time(b3))})")
+        else:
+            inp = load("sim_inputs")[model]
+            b4, b5 = inp["betas"][3], inp["betas"][4]
+            if scn and scn[0] == "prospective":
+                projection_note = (f" From 01/01/2021, β = {b5 * (1 + scn[2] / 100):.4f}. The hospitalisation probability ψ is "
+                                   "kept at its last fitted value: the 2021 age mix of cases and testing volume are not used.")
+            ref_note = (f"For reference, the fitted switch on 06/11/2020 already reduces β by {100 * (1 - b5 / b4):.0f}% in this model "
+                        f"(β₄ = {b4:.4f} → β₅ = {b5:.4f}).")
+            lock_list, cp_dates, vax_line = True, None, None
+            lock_text = "Lockdowns that happened (30/03 – 10/05/2020, from 06/11/2020)"
         metrics = compute_metrics(times, tr, times, tr["Rt"], start, end)
 
         def panel(s):
             layers = [("line", "Scenario" if scn else "Simulated", tr[s], COLORS[s])]
             return time_panel(times, layers, start, end, None if s == "Rt" else SERIES_SHORT[s], window=window,
                               rt_line=s == "Rt", y_digits=1 if s == "Rt" else None, y_title="Rₜ" if s == "Rt" else None,
-                              lockdowns=True)
+                              lockdowns=lock_list, cp_dates=cp_dates, vax=vax_line)
 
         view = scn_view.value
         if view == "Plots":
             leg = [("line", CT["muted"], "Scenario" if scn else "Simulated (fitted baseline)")]
             if window:
                 leg.append(("window", CT["window"], f"Window where it differs ({window[2]})"))
-            leg.append(("window", LOCKDOWN_COLOR, "Lockdowns that happened (30/03 – 10/05/2020, from 06/11/2020)"))
+            leg.append(("window", LOCKDOWN_COLOR, lock_text))
             leg.append(("rule", CT["rule"], "Fitted changepoint"))
+            if vi:
+                leg.append(("line", VAX_COLOR, "Start of vaccination"))
             body = (legend(leg) + panel_grid([chart_card(chart(panel(s), 250), COLORS[s]) for s in SERIES])
                     + card(chart(panel("Rt"), 260), "Effective reproduction number Rₜ"))
         elif view == "Epidemic metrics":
@@ -1686,7 +1835,7 @@ def _(
             a, b = overlay_pair(scn_ov_preset, scn_ov_left, scn_ov_right)
             side = lambda n: dict(name=n, times=times, values=tr[names[n]], color=COLORS[names[n]], is_rt=names[n] == "Rt")
             body = card(f'<div class="stack-sm">{overlay_picker_html(scn_ov_preset, scn_ov_left, scn_ov_right)}'
-                        f'{chart(overlay_chart(start, end, side(a), side(b), window, lockdowns=True), 360)}</div>', "Overlay",
+                        f'{chart(overlay_chart(start, end, side(a), side(b), window, lockdowns=lock_list, cp_dates=cp_dates, vax=vax_line), 360)}</div>', "Overlay",
                         "Compare two simulated series on the same time axis, each with its own y-axis, so that their "
                         "different scales do not matter.")
         fixed_note = ""
@@ -1697,8 +1846,7 @@ def _(
         return f"""<div class="stack">
           <div><div class="result-head"><h2>{title}</h2></div>
           <p class="small" style="font-size:13px;margin-top:4px">Period: {fmt_date(start)} – {fmt_date(end)}. Only simulated values
-          are shown. For reference, the fitted switch on 06/11/2020 already reduces β by {100 * (1 - b5 / b4):.0f}% in this model
-          (β₄ = {b4:.4f} → β₅ = {b5:.4f}).{projection_note}</p>{fixed_note}</div>
+          are shown. {ref_note}{projection_note}</p>{fixed_note}</div>
           <div class="soft-panel" style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px">
             <div style="flex:1;min-width:220px">{field(f"{scn_name}", "Name for this simulation")}</div><div class="save-wrap">{scn_save}</div></div>
           <details class="exp" {"open" if fixed else ""}><summary><span class="ic">{icon("lock")}</span>Fixed parameters
@@ -1758,7 +1906,15 @@ def _(cmp_chosen, cmp_drop, cmp_remove, cmp_series, get_saved, get_scn_tab, mode
         out = card(f'<div class="stack-sm">{cmp_chosen}{cmp_series}</div>', "Saved simulations",
                    "Differences in the table are relative to the first one selected.")
         if items:
-            fig = compare_chart([dict(name=s["name"], times=s["times"], values=s["data"][series]) for s in items], label, is_rt)
+            # with a model with vaccination among them: its three lockdowns (2020-2021)
+            if any(s.get("vax") for s in items):
+                lock_list = vax_info("age_point_vac")["lockdowns"]
+                lock_text = "Lockdowns that happened (" + ", ".join(
+                    f"{fmt_date(day_to_time(a))} – {fmt_date(day_to_time(b))}" for a, b in lock_list) + ")"
+            else:
+                lock_list, lock_text = True, "Lockdowns that happened (30/03 – 10/05/2020, from 06/11/2020)"
+            fig = compare_chart([dict(name=s["name"], times=s["times"], values=s["data"][series]) for s in items], label, is_rt,
+                                lockdowns=lock_list)
             ms = [compute_metrics(s["times"], s["data"], s["times"], s["data"]["Rt"], s["times"][0], s["times"][-1]) for s in items]
             ref = ms[0]
 
@@ -1783,7 +1939,7 @@ def _(cmp_chosen, cmp_drop, cmp_remove, cmp_series, get_saved, get_scn_tab, mode
                                  filename="saved_scenarios.csv", label="Trajectories (CSV)")
             dl_plot = mo.download(data=lambda: figures_html(f"{label} — saved simulations", [fig]).encode(),
                                   filename=f"compare_{series}.html", label="Comparison plot (HTML)")
-            out += f"""{legend([("window", LOCKDOWN_COLOR, "Lockdowns that happened (30/03 – 10/05/2020, from 06/11/2020)")])}
+            out += f"""{legend([("window", LOCKDOWN_COLOR, lock_text)])}
               {chart_card(chart(fig, 380 + 20 * len(items)))}
               <div><h4 class="sec">Summary <span class="muted" style="font-weight:400">(differences relative to
               <strong>{items[0]["name"]}</strong>)</span></h4>

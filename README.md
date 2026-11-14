@@ -29,7 +29,11 @@ marimo edit app.py         # the notebook, to change the code
    reopening, simulated with the ODE model, optionally with other values of the
    fixed parameters; save runs and compare them. These are the retrospective
    scenarios; prospective ones continue the fitted model after 31/12/2020 for up
-   to 3 months, with a chosen change of β from 01/01/2021.
+   to 3 months, with a chosen change of β from 01/01/2021. Models 3a and 3b with
+   vaccination run the same retrospective scenarios over 2020–2021, with three
+   lockdowns that happened (spring 2020, November 2020, January 2021); their
+   simulator (`simulate_vax()`) adds the vaccinated susceptibles S_V and steps one
+   day at a time with that day's β, ψ, v, φ_h and φ_c.
 4. **Model with vaccination**: the age-stratified Models 3a and 3b with a
    vaccinated-susceptible compartment, fitted by nonlinear least squares from
    1 March 2020 to 31 December 2021, with nine changepoints of β. Views as in
