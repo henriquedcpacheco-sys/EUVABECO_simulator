@@ -85,6 +85,7 @@ with app.setup:
               rule="#7d889a", obs="#9aa3b2", window="#f07a55", border="#34425a", tooltip="#1b2430")
     FONT = "Inter Variable, system-ui, sans-serif"
     LOCKDOWN_COLOR = "#7c8cf8"   # shading of the two lockdowns that happened
+    SCN_WINDOW_COLOR = "#f07a55"  # shading of the scenario's own change (extra lockdown, later reopening, projection), as CT["window"]
 
     DAY0 = datetime(2020, 3, 1, tzinfo=timezone.utc)   # day 0 of the simulator
     N_DAYS = 306
@@ -629,7 +630,7 @@ def marks(start: int, end: int, window: tuple | None = None, rt_line: bool = Fal
         a, b = max(window[0], start), min(window[1], end)
         if a < b:
             shapes.append(dict(type="rect", xref="x", yref="paper", x0=iso(a), x1=iso(b), y0=0, y1=1,
-                               fillcolor=CT["window"], opacity=0.24, line=dict(width=0), layer="below"))
+                               fillcolor=SCN_WINDOW_COLOR, opacity=0.24, line=dict(width=0), layer="below"))
     return shapes
 
 
@@ -1834,7 +1835,7 @@ def _(
         if view == "Plots":
             leg = [("line", CT["muted"], "Scenario" if scn else "Simulated (fitted baseline)")]
             if window:
-                leg.append(("window", CT["window"], f"Window where it differs ({window[2]})"))
+                leg.append(("window", SCN_WINDOW_COLOR, f"Window where it differs ({window[2]})"))
             leg.append(("window", LOCKDOWN_COLOR, lock_text))
             leg.append(("rule", CT["rule"], "Fitted changepoint"))
             if vi:
