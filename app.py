@@ -188,7 +188,7 @@ with app.setup:
     MODES = [
         dict(value="early", n=1, title="Modeling early dynamics", caption="1 March – 31 December 2020, fixed period", icon=ICONS["activity"]),
         dict(value="partial", n=2, title="Modeling partial early dynamics", caption="Choose the time period", icon=ICONS["waypoints"]),
-        dict(value="scenarios", n=3, title="Transmission scenarios", caption="Extra lockdown or later school reopening", icon=ICONS["flask-conical"]),
+        dict(value="scenarios", n=3, title="Transmission scenarios", caption="Extra lockdown or later school reopening, in 2020 or in 2020 – 2021 with vaccination", icon=ICONS["flask-conical"]),
         dict(value="vaccination", n=4, title="Model with vaccination", caption="Models 3a and 3b, 1 March 2020 – 31 December 2021", icon=ICONS["syringe"]),
     ]
 
@@ -1541,9 +1541,11 @@ def _():
     SCN_MODELS = {model_label(MODEL_OPTIONS[c][0], MODEL_OPTIONS[c][2]): v for v, c in
                   [("sim_m1", "sim_m1"), ("sim_m2", "sim_m2"), ("age_nocorr", "age_nocorr"), ("age_point", "age_3b")]}
     # the age-stratified models with vaccination, 1 March 2020 - 31 December 2021
-    SCN_MODELS.update({model_label(f"{VAX_MODELS[k][1]} — with vaccination", f"{VAX_MODELS[k][2]}, 2020–2021"): k
-                       for k in VAX_MODELS})
-    scn_model = mo.ui.tabs({k: "" for k in SCN_MODELS}, orientation="vertical")
+    _vax_models = {model_label(VAX_MODELS[k][0], f"{VAX_MODELS[k][2]}, with vaccination"): k for k in VAX_MODELS}
+    SCN_MODELS_BY_HORIZON = {"2020": dict(SCN_MODELS), "2021": _vax_models}
+    SCN_MODELS.update(_vax_models)
+    # first choice of the mode: scenarios for 2020, or for 2020-2021 (models with vaccination)
+    scn_horizon = mo.ui.radio({"2020": "2020", "2020 – 2021": "2021"}, value="2020", inline=True)
     scn_kind = mo.ui.radio({"Retrospective": "retro", "Prospective": "pro"}, value="Retrospective", inline=True)
     scn_until = mo.ui.date(start=day_date(LAST_DAY + 1), stop=day_date(LAST_DAY + MAX_PROJECTION),
                            value=day_date(LAST_DAY + MAX_PROJECTION), full_width=True)
@@ -1556,9 +1558,17 @@ def _():
     scn_fixed = mo.ui.dictionary({f[0]: mo.ui.number(start=f[3], stop=f[4], step=f[5], value=f[2], label=f[1], full_width=True)
                                   for f in FIXED_FIELDS})
     scn_ov_preset, scn_ov_left, scn_ov_right = overlay_widgets()
-    return (SCN_MODELS, scn_beta, scn_fixed, scn_kind, scn_until, get_saved, get_scn_config, get_scn_tab, scn_delay, scn_model, scn_ov_left, scn_ov_preset,
+    return (SCN_MODELS, SCN_MODELS_BY_HORIZON, scn_beta, scn_fixed, scn_horizon, scn_kind, scn_until, get_saved,
+            get_scn_config, get_scn_tab, scn_delay, scn_ov_left, scn_ov_preset,
             scn_ov_right, scn_red, scn_type, scn_view, set_saved, set_scn_config,
             set_scn_tab)
+
+
+@app.cell(hide_code=True)
+def _(SCN_MODELS_BY_HORIZON, scn_horizon):
+    # The models of the chosen period: Models 1, 2, 3a, 3b for 2020; 3a and 3b with vaccination for 2020-2021
+    scn_model = mo.ui.tabs({k: "" for k in SCN_MODELS_BY_HORIZON[scn_horizon.value]}, orientation="vertical")
+    return (scn_model,)
 
 
 @app.cell(hide_code=True)
@@ -1642,6 +1652,7 @@ def _(
     scn_delay,
     scn_dur,
     scn_fixed,
+    scn_horizon,
     scn_kind,
     scn_until,
     scn_model,
@@ -1697,11 +1708,13 @@ def _(
               <strong>{fmt_date(day_to_time(SCHOOL_CP + scn_delay.value))}</strong>.</p></div>"""
         else:
             _extra = '<p class="small">The fitted model as it is, with no counterfactual change.</p>'
-        _kind = field(f"{scn_kind}", "Type of scenario",
-                      "Retrospective: what if 2020 had gone differently. Prospective: what comes after the data.")
+        _hor = field(f"{scn_horizon}", "Scenarios for",
+                     "2020: Models 1, 2, 3a and 3b, fitted to 1 March – 31 December 2020. "
+                     "2020 – 2021: Models 3a and 3b with vaccination, fitted to 1 March 2020 – 31 December 2021.")
+        _kind = _hor + field(f"{scn_kind}", "Type of scenario",
+                             "Retrospective: what if 2020 had gone differently. Prospective: what comes after the data.")
         if _vi:
-            _kind = field('<p class="small" style="margin:0">Retrospective only: the models with vaccination are fitted '
-                          'up to 31/12/2021, the end of the data.</p>', "Type of scenario")
+            _kind = _hor
         if scn_kind.value == "pro" and not _vi:
             _days = (scn_until.value - day_date(LAST_DAY)).days
             _pro = f"""<div class="box">
