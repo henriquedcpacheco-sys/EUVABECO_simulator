@@ -189,8 +189,29 @@ with app.setup:
         dict(value="early", n=1, title="Modeling early dynamics", caption="1 March – 31 December 2020, fixed period", icon=ICONS["activity"]),
         dict(value="partial", n=2, title="Modeling partial early dynamics", caption="Choose the time period", icon=ICONS["waypoints"]),
         dict(value="scenarios", n=3, title="Transmission scenarios", caption="Extra lockdown or later school reopening", icon=ICONS["flask-conical"]),
-        dict(value="vaccination", n=4, title="Model with vaccination", caption="Not available yet", icon=ICONS["syringe"], soon=True),
+        dict(value="vaccination", n=4, title="Model with vaccination", caption="Models 3a and 3b, 1 March 2020 – 31 December 2021", icon=ICONS["syringe"]),
     ]
+
+    # Mode 4: the age-stratified models with vaccination, fitted over 2020-2021
+    VAX_COLOR = "#ef5b5b"            # start of vaccination (27/12/2020)
+    VAX_MODELS = {
+        "age_nocorr_vac": ("Model 3a — age-stratified ψ", "Model 3a", "Without testing-volume coupling"),
+        "age_point_vac": ("Model 3b — age-stratified ψ", "Model 3b", "With testing-volume coupling"),
+    }
+    VAX_MODEL_BY_LABEL = {model_label(v[0], v[2]): k for k, v in VAX_MODELS.items()}
+    VAX_PARAM_TEXT = {
+        "beta": "Transmission rate, period {k}", "theta": "ICU admission probability (from the ward)",
+        "phi_h": "Ward fatality probability, up to 31/12/2020", "r_c": "ICU/ward mortality ratio, up to 31/12/2020",
+        "phi_h_JanFeb": "Ward fatality probability, 01/01–28/02/2021", "r_c_JanFeb": "ICU/ward mortality ratio, 01/01–28/02/2021",
+        "phi_h_after": "Ward fatality probability, from 01/03/2021", "r_c_after": "ICU/ward mortality ratio, from 01/03/2021",
+        "E0": "Initial exposed individuals",
+        "psi_base": "Hospitalisation probability of the 0-49 age group (other groups: x2, x4, x8)",
+        "F_test": "Testing decay: how fast the hospitalisation probability falls as testing grows",
+    }
+    VAX_PARAM_SYMBOL = {"theta": "θ", "phi_h": "φ_h", "r_c": "r_c", "phi_h_JanFeb": "φ_h (Jan–Feb 2021)",
+                        "r_c_JanFeb": "r_c (Jan–Feb 2021)", "phi_h_after": "φ_h (from Mar 2021)",
+                        "r_c_after": "r_c (from Mar 2021)", "E0": "E₀", "psi_base": "ψ_base", "F_test": "F_test"}
+    AGE_GROUP_COLORS = ["#56B4E9", "#F0B23A", "#2EC497", "#D98FBA"]
     ZOOM_HINT = "Drag to move along the time axis; the toolbar at the top right of a plot zooms, resets, or saves it as PNG. Double-click to reset."
     # Plotly toolbar shown when hovering a chart
     PLOT_CONFIG = {"displaylogo": False, "scrollZoom": False, "doubleClick": "reset",
@@ -461,9 +482,11 @@ def base_layout(title: str | None = None, top: int | None = None) -> dict:
 
 @app.function
 def time_axis(start: int, end: int) -> dict:
+    # more than ~14 months (Mode 4, 2020-2021): one tick every 3 months, with the year
+    long = end - start > 420 * 86_400_000
     return dict(type="date", range=[iso(start), iso(end)], showgrid=False, zeroline=False,
-                linecolor=CT["axis"], ticks="", tickformat="%b", dtick="M1", hoverformat="%d/%m/%Y",
-                tickfont=dict(size=11, color=CT["muted"]), automargin=True)
+                linecolor=CT["axis"], ticks="", tickformat="%b %Y" if long else "%b", dtick="M3" if long else "M1",
+                hoverformat="%d/%m/%Y", tickfont=dict(size=11, color=CT["muted"]), automargin=True)
 
 
 @app.function
@@ -476,10 +499,15 @@ def value_axis(digits: int | None = None, title: str | None = None) -> dict:
 
 @app.function
 def marks(start: int, end: int, window: tuple | None = None, rt_line: bool = False, changepoints: bool = True,
-          lockdowns: bool = False) -> list:
+          lockdowns: bool = False, cp_dates: list | None = None, vax: str | None = None) -> list:
     """Dashed changepoint lines, the Rt = 1 line, the scenario window and
-    (lockdowns=True) the two lockdowns that actually happened."""
+    (lockdowns=True) the two lockdowns that actually happened. cp_dates
+    (ISO dates) replaces the 2020 changepoints; vax adds the start of
+    vaccination as a solid line."""
     shapes = []
+    if vax and start <= day_to_time(iso_to_day(vax)) <= end:
+        shapes.append(dict(type="line", xref="x", yref="paper", x0=vax, x1=vax, y0=0, y1=1,
+                           line=dict(color=VAX_COLOR, width=1.6)))
     if lockdowns:
         for a, b in REAL_LOCKDOWNS:
             a, b = max(day_to_time(a), start), min(day_to_time(b), end)
@@ -487,10 +515,10 @@ def marks(start: int, end: int, window: tuple | None = None, rt_line: bool = Fal
                 shapes.append(dict(type="rect", xref="x", yref="paper", x0=iso(a), x1=iso(b), y0=0, y1=1,
                                    fillcolor=LOCKDOWN_COLOR, opacity=0.13, line=dict(width=0), layer="below"))
     if changepoints:
-        for ev in NPI_EVENTS:
-            t = day_to_time(iso_to_day(ev[2]))
+        for cp in (cp_dates if cp_dates is not None else [ev[2] for ev in NPI_EVENTS]):
+            t = day_to_time(iso_to_day(cp))
             if start <= t <= end:
-                shapes.append(dict(type="line", xref="x", yref="paper", x0=ev[2], x1=ev[2], y0=0, y1=1,
+                shapes.append(dict(type="line", xref="x", yref="paper", x0=cp, x1=cp, y0=0, y1=1,
                                    line=dict(color=CT["rule"], width=1.1, dash="5px,4px")))
     if rt_line:
         shapes.append(dict(type="line", xref="paper", yref="y", x0=0, x1=1, y0=1, y1=1,
@@ -505,7 +533,8 @@ def marks(start: int, end: int, window: tuple | None = None, rt_line: bool = Fal
 
 @app.function
 def time_panel(times: list, layers: list, start: int, end: int, title: str | None = None,
-               window=None, rt_line=False, y_digits=None, y_title=None, lockdowns=False) -> go.Figure:
+               window=None, rt_line=False, y_digits=None, y_title=None, lockdowns=False,
+               cp_dates=None, vax=None) -> go.Figure:
     """Layers: ("dots", name, values, color), ("line", name, values, color, width),
     ("band", name, lo, hi, color, opacity)."""
     idx = [i for i, t in enumerate(times) if start <= t <= end]
@@ -532,12 +561,13 @@ def time_panel(times: list, layers: list, start: int, end: int, title: str | Non
                             fill="tonexty", fillcolor=rgba(L[4], L[5]), hovertemplate="%{y:,.1f}")
     fig.update_layout(**base_layout(title), xaxis=time_axis(start, end),
                       yaxis=value_axis(y_digits, y_title),
-                      shapes=marks(start, end, window, rt_line, lockdowns=lockdowns))
+                      shapes=marks(start, end, window, rt_line, lockdowns=lockdowns, cp_dates=cp_dates, vax=vax))
     return fig
 
 
 @app.function
-def overlay_chart(start: int, end: int, left: dict, right: dict, window=None, lockdowns=False) -> dict:
+def overlay_chart(start: int, end: int, left: dict, right: dict, window=None, lockdowns=False,
+                  cp_dates=None, vax=None) -> dict:
     """Two series on one time axis, each with its own y-axis."""
     fig = go.Figure()
     for side, yaxis in ((left, "y"), (right, "y2")):
@@ -554,7 +584,7 @@ def overlay_chart(start: int, end: int, left: dict, right: dict, window=None, lo
             ax.update(overlaying="y")
         return ax
 
-    shapes = marks(start, end, window, lockdowns=lockdowns)
+    shapes = marks(start, end, window, lockdowns=lockdowns, cp_dates=cp_dates, vax=vax)
     for s, yref in ((left, "y"), (right, "y2")):
         if s["is_rt"]:
             shapes.append(dict(type="line", xref="paper", yref=yref, x0=0, x1=1, y0=1, y1=1,
@@ -571,7 +601,7 @@ def overlay_chart(start: int, end: int, left: dict, right: dict, window=None, lo
 
 
 @app.function
-def residual_chart(weeks: list, stacks: list, start: int, end: int) -> dict:
+def residual_chart(weeks: list, stacks: list, start: int, end: int, cp_dates=None, vax=None) -> dict:
     """Stacked weekly squared log-residuals, one bar per week."""
     fig = go.Figure()
     week_ms = 7 * 86_400_000
@@ -583,7 +613,8 @@ def residual_chart(weeks: list, stacks: list, start: int, end: int) -> dict:
     layout.update(showlegend=True, barmode="stack",
                   legend=dict(orientation="h", x=0, y=1.02, xanchor="left", yanchor="bottom",
                               font=dict(size=12, color=CT["text"])))
-    fig.update_layout(**layout, xaxis=time_axis(start, end), yaxis=value_axis(0), shapes=marks(start, end))
+    fig.update_layout(**layout, xaxis=time_axis(start, end), yaxis=value_axis(0),
+                      shapes=marks(start, end, cp_dates=cp_dates, vax=vax))
     fig.update_xaxes(hoverformat="Week of %d/%m/%Y")
     return fig
 
@@ -886,8 +917,9 @@ def _():
         <div class="pill"><i></i>Online COVID-19 simulator</div>
         <h1>COVID-19 Model Simulator — Portugal</h1>
         <p class="lead">Explore how a compartmental model fitted to Portugal's 2020 epidemic reproduces confirmed cases,
-        ward and ICU occupancy and deaths, compare model versions of increasing complexity, and test
-        counterfactual extra lockdowns and later school reopenings.</p>
+        ward and ICU occupancy and deaths, compare model versions of increasing complexity, test
+        counterfactual extra lockdowns and later school reopenings, and follow the age-stratified models with
+        vaccination through 2021.</p>
         <p class="by"><b>Henrique Pacheco</b>, CEMAT · <b>Erida Gjini</b>, CEMAT</p>
       </div>
     </section>""")
@@ -1772,19 +1804,369 @@ def _(cmp_chosen, cmp_drop, cmp_remove, cmp_series, get_saved, get_scn_tab, mode
 
 
 # =========================================================================
-# Mode 4 and the footer
+# Mode 4: the age-stratified models with vaccination, 1 March 2020 - 31 December 2021
+# (fits from Tese/D2/d2_2021_full_fit3.m, exported by d2_2021_export_web.m)
 # =========================================================================
+@app.function
+def vax_param_symbol(name: str) -> str:
+    if name.startswith("beta"):
+        return "β" + name[4:].translate(str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉"))
+    return VAX_PARAM_SYMBOL.get(name, name)
+
+
+@app.function
+def vax_param_meaning(name: str) -> str:
+    if name.startswith("beta"):
+        return VAX_PARAM_TEXT["beta"].format(k=name[4:])
+    return VAX_PARAM_TEXT.get(name, "")
+
+
 @app.cell(hide_code=True)
 def _(mode):
+    # Controls of Mode 4 (made again when the mode changes, like the fit modes).
+    _ = mode
+    vax_data = load("vaccination")
+    vax_times = [day_to_time(iso_to_day(vax_data["start"]) + i) for i in range(vax_data["n"])]
+    vax_cps = [c["changepoint"] for c in vax_data["changepoints"]]
+    get_vax_ran, set_vax_ran = mo.state(None)                          # model of the last run
+    get_vax_tab, set_vax_tab = mo.state("Data and changepoints")       # open tab
+    vax_model = mo.ui.tabs({k: "" for k in VAX_MODEL_BY_LABEL}, orientation="vertical")
+
+    def _run(clicks):
+        if vax_model.value:
+            set_vax_ran(VAX_MODEL_BY_LABEL[vax_model.value])
+            set_vax_tab("Fitted model")
+        return clicks + 1
+
+    vax_run = mo.ui.button(label="▶  Run model fitting", value=0, on_click=_run, kind="success", full_width=True)
+    vax_ov_preset, vax_ov_left, vax_ov_right = overlay_widgets()
+    return (get_vax_ran, get_vax_tab, set_vax_tab, vax_cps, vax_data, vax_model, vax_ov_left, vax_ov_preset,
+            vax_ov_right, vax_run, vax_times)
+
+
+@app.cell(hide_code=True)
+def _(get_vax_tab, set_vax_tab):
+    vax_tabs = mo.ui.tabs({"Data and changepoints": "", "Parameters": "", "Fitted model": ""},
+                          value=get_vax_tab(), on_change=set_vax_tab)
+    return (vax_tabs,)
+
+
+@app.cell(hide_code=True)
+def _(get_vax_ran):
+    # Views of a result (made again for each run, so a new run opens on "Fit")
+    _ = get_vax_ran()
+    vax_view = mo.ui.radio(["Fit", "Fit quality", "Parameters", "Rₜ", "Hospitalisation probability",
+                            "Epidemic metrics", "Overlay"], value="Fit", inline=True)
+    return (vax_view,)
+
+
+@app.cell(hide_code=True)
+def _(mode, vax_model, vax_run):
+    # Left column of Mode 4
     _out = None
     if mode == "vaccination":
-        _out = mo.Html('<div data-mode="vaccination">' + empty_state(
-            "syringe", "Model with vaccination — coming soon",
-            "<p style='margin:0'>This mode is not available yet. It will extend one of the calibrated models (most likely Model 3b) "
-            "with vaccination, for later stages of the pandemic. Meanwhile, explore the fitted models (modes 1 and 2) or the "
-            "transmission scenarios (mode 3).</p>") + "</div>")
+        _hint = ("Vaccination acts on each age group separately, so only the age-stratified models are extended. "
+                 "The two differ in how the hospitalisation probability ψ is constructed.")
+        _method = ('<div class="soft-panel" style="font-size:13.5px">Nonlinear least squares<br>'
+                   '<span class="small">Bayesian fits are only available for 2020 (modes 1 and 2).</span></div>')
+        _body = (f'<div class="stack">{field(f"{vax_model}", "Model", _hint)}{field(_method, "Fitting method")}'
+                 f'<div class="run-wrap">{vax_run}</div></div>')
+        _out = page(mode, card(_body, "Set up the fit", "1 March 2020 – 31 December 2021. Choose a model.",
+                               "sliders-horizontal", accent=True), "side")
     _out
     return
+
+
+@app.cell(hide_code=True)
+def _(mode, vax_tabs):
+    page(mode, f"{vax_tabs}") if mode == "vaccination" else None
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    get_vax_ran,
+    get_vax_tab,
+    mode,
+    vax_cps,
+    vax_data,
+    vax_model,
+    vax_ov_left,
+    vax_ov_preset,
+    vax_ov_right,
+    vax_times,
+    vax_view,
+):
+    # Right column of Mode 4: the open tab
+    _start, _end = vax_times[0], vax_times[-1]
+    _vax = vax_data["vaccination_start"]
+    _obs = vax_data["observed"]
+    _vc = vax_data["vaccine"]
+
+    def _panel(layers, title=None, **kw):
+        return time_panel(vax_times, layers, _start, _end, title, cp_dates=vax_cps, vax=_vax, **kw)
+
+    def _vax_explainer(is_open):
+        f1 = mo.md(r"$$\frac{dS_V}{dt} = -(1-p)\,\beta\,\frac{S_V\,(I_{uc}+I_c)}{N} + v(t)\,\frac{S}{S+E+R}$$").text
+        f2 = mo.md(r"$$f_a(t) = 1 - q\,\frac{V_a(t)\,(1-p)}{1-p\,V_a(t)}, \qquad "
+                   r"\psi(t) = Ch(t)\sum_a P_a(t)\,\psi_a\,f_a(t)$$").text
+        return f"""<details class="exp" {"open" if is_open else ""}>
+          <summary><span class="ic">{icon("syringe")}</span>Vaccination: new data and model structure<span class="chev">{icon("chevron-down")}</span></summary>
+          <div class="in prose">
+          <div class="cols2">
+            <div><h4>New data</h4><ul>
+              <li>The daily number of people completing vaccination, v(t), from 27/12/2020 (DSSG Portugal).</li>
+              <li>The data give only a national total; it is split into the four age groups with the national vaccination
+              plan (priority groups and their age profile, as made available by Viana et al., 2021).</li></ul></div>
+            <div><h4>New model structure</h4><ul>
+              <li>A compartment S<sub>V</sub> of vaccinated susceptibles. People completing vaccination are taken from S, E and R
+              in proportion to their size; only those leaving S change state.</li>
+              <li>Vaccinated people are infected {1 - _vc["p"]:.2f} times as often as unvaccinated people (p = {_vc["p"]})
+              and hospitalised {1 - _vc["h"]:.2f} times as often (h = {_vc["h"]}), so an infected vaccinated person is
+              hospitalised {1 - _vc["q"]:.3f} times as often as an infected unvaccinated one (q = {_vc["q"]:.3f}).</li>
+              <li>In each age group, ψ is multiplied by f<sub>a</sub>(t), from the share of that group's cases that are vaccinated.</li></ul></div></div>
+          <div class="formula">{f1}</div><div class="formula">{f2}</div>
+          <p class="small">V<sub>a</sub>(t): coverage of age group a; P<sub>a</sub>(t): its share of the day's cases;
+          Ch(t) = 1 in Model 3a. β changes at the nine changepoints below, and the ward and ICU fatality probabilities
+          take separate values up to 31/12/2020, in January–February 2021 and from 01/03/2021.</p></div></details>"""
+
+    def _data_tab():
+        panels = []
+        for s in SERIES:
+            fig = _panel([("dots", "Observed", _obs[s], COLORS[s])], SERIES_LABELS[s])
+            panels.append(chart_card(chart(fig, 250), COLORS[s]))
+        tests = _panel([("line", "Daily tests per million", vax_data["tests_per_million"], "#A5B4FC", 1.8)],
+                       "Daily tests per million")
+        cov = vax_data["coverage"]
+        cov_fig = _panel([("line", g, [100 * row[k] for row in cov["values"]], AGE_GROUP_COLORS[k], 2.2)
+                          for k, g in enumerate(cov["groups"])], "Full vaccination coverage by age group (%)", y_digits=0)
+        cp_rows = []
+        for c in vax_data["changepoints"]:
+            d = iso_to_day(c["changepoint"])
+            cp_rows.append(dict(event=c["event"], policy=fmt_date(day_to_time(iso_to_day(c["policy"]))) if c["policy"] else "—",
+                                cp=fmt_date(day_to_time(d)),
+                                days=str(d - iso_to_day(c["policy"])) if c["policy"] else "—"))
+        return f"""<div class="stack">
+          <p class="lede">The four observed daily series for Portugal, 1 March 2020 – 31 December 2021, with the daily testing
+          volume and the vaccination coverage. The dashed vertical lines are the <strong>changepoints</strong> of the
+          transmission rate β, estimated over the whole period; the red line is the start of vaccination (27/12/2020).</p>
+          {legend([*[("dot", COLORS[s], SERIES_LABELS[s].replace("Daily confirmed cases", "Cases")) for s in SERIES],
+                   ("rule", CT["rule"], "Changepoint"), ("line", VAX_COLOR, "Start of vaccination")])}
+          {panel_grid(panels)}
+          <div class="grid2">{chart_card(chart(tests, 250), "#A5B4FC")}{chart_card(chart(cov_fig, 250), AGE_GROUP_COLORS[0])}</div>
+          {card(table([("event", "Event"), ("policy", "Policy date", "r"), ("cp", "Changepoint used", "r"),
+                       ("days", "Days after policy", "r")], cp_rows),
+                "Interventions and the changepoints used",
+                "Each changepoint tied to a policy was estimated from the case data inside the 21 days that follow its policy "
+                "date. The summer and autumn 2021 changepoints have no policy date and were estimated inside search windows. "
+                "This gives 10 periods with their own β.")}
+          {_vax_explainer(True)}
+          <p class="small" style="font-size:13px"><strong>Data sources:</strong> daily confirmed cases, deaths, ward/ICU occupancy,
+          the age breakdown of confirmed cases, people fully vaccinated and, in 2021, samples tested come from DSSG Portugal's
+          <a href="https://github.com/dssg-pt/covid19pt-data">covid19pt-data</a> project. Testing volume in 2020 comes from
+          <a href="https://github.com/owid/covid-19-data">Our World in Data</a>; the 2021 samples are rescaled to the same units.
+          Vaccination plan: <a href="https://doi.org/10.1038/s41467-021-23938-8">Viana et al. (2021)</a>.</p></div>"""
+
+    def _params_tab(model):
+        cols = [("p", "Parameter", "nw b"), ("m", "Meaning")]
+        fixed = table(cols, [dict(p=p, m=m + "".join(f"<sup>{r}</sup>" for r in refs)) for p, m, refs in FIXED_PARAMS],
+                      dense=True)
+        fixed += ('<ol class="refs">' + "".join(f'<li>{text} <a href="{url}" target="_blank" rel="noreferrer">{url[16:]}</a></li>'
+                                                for text, url in FIXED_REFS) + "</ol>")
+        vac = table(cols, [
+            dict(p=f"p = {_vc['p']}", m='Protection against infection: a vaccinated person is infected 0.14 times as often '
+                 '(<a href="https://doi.org/10.1080/23744235.2021.1982144" target="_blank" rel="noreferrer">Björk et al., 2021</a>)'),
+            dict(p=f"h = {_vc['h']}", m='Total protection against hospitalisation: a vaccinated person is hospitalised 0.05 times '
+                 'as often (<a href="https://doi.org/10.2807/1560-7917.ES.2021.26.38.2100833" target="_blank" '
+                 'rel="noreferrer">Nunes et al., 2021</a>)'),
+            dict(p=f"q = {_vc['q']:.3f}", m="Protection against hospitalisation once infected: (1 − h) = (1 − p)(1 − q)"),
+        ], dense=True)
+        est_list = [("β₁ … β₁₀", "Transmission rate, one value per period between changepoints"),
+                    ("θ", "Probability that a ward patient is admitted to ICU"),
+                    ("φ_h, r_c", "Ward fatality probability and ICU/ward mortality ratio, three values each: up to "
+                                 "31/12/2020, 01/01–28/02/2021, from 01/03/2021"),
+                    ("E₀", "Initial exposed individuals"),
+                    ("ψ_base", "Hospitalisation probability of the 0-49 age group (other groups: x2, x4, x8)"),
+                    ("F_test", "Model 3b only: testing decay of the hospitalisation probability")]
+        est = table(cols, [dict(p=p, m=m) for p, m in est_list], dense=True)
+        return f"""<div class="stack">
+          <p class="lede">The fixed parameters are those of the 2020 models; vaccination adds three fixed values from the
+          literature. The exact list of estimated values for the model you run is in its <strong>Parameters</strong> view.</p>
+          <div class="cols2">{card(fixed, f'{icon("lock")}Fixed')}{card(est, f'{icon("search-check")}Estimated from the data')}</div>
+          {card(vac, f'{icon("syringe")}Vaccine (fixed)')}</div>"""
+
+    def _glance():
+        ms = vax_data["models"]
+        max_j = max(m["J"]["total"]["total"] for m in ms.values())
+        rows = []
+        for m in ms.values():
+            bar = (f'<div class="jbar"><div class="tr"><i style="width:{100 * m["J"]["total"]["total"] / max_j:.1f}%"></i></div>'
+                   f'<b>{fmt_num(m["J"]["total"]["total"])}</b></div>')
+            rows.append(dict(name=m["label"], n=str(m["nEst"]), y20=fmt_num(m["J"]["total"]["y2020"]),
+                             y21=fmt_num(m["J"]["total"]["y2021"]), total=bar,
+                             **{k: fmt_num(m["J"][k]["total"]) for k in SERIES}))
+        cols = [("name", "Model", "b"), ("n", "Estimated parameters", "r"),
+                *[(k, f"Error J — {'ICU' if k == 'icu' else k}", "r") for k in SERIES],
+                ("y20", "Error J — 2020", "r"), ("y21", "Error J — 2021", "r"), ("total", "Error J — total")]
+        return card(table(cols, rows), "Models at a glance",
+                    "Error J: sum of squared log-residuals between data and model, over 1 March 2020 – 31 December 2021.")
+
+    def _weekly(sim):
+        weeks, vals = [], {s: [] for s in SERIES}
+        for i, t in enumerate(vax_times):
+            dt = datetime.fromtimestamp(t / 1000, tz=timezone.utc)
+            w = t - dt.weekday() * 86_400_000
+            if not weeks or weeks[-1] != w:
+                weeks.append(w)
+                for s in SERIES:
+                    vals[s].append(0.0)
+            for s in SERIES:
+                r = np.log(max(sim[s][i], 0) + 1) - np.log(_obs[s][i] + 1)
+                vals[s][-1] += float(r * r)
+        return weeks, vals
+
+    def _result(key):
+        fit = vax_data["models"][key]
+        sim, rt = fit["sim"], fit["rt"]
+        label = f"{VAX_MODELS[key][0]}, {VAX_MODELS[key][2].lower()} · with vaccination"
+
+        fit_figs = [_panel([("dots", "Observed", _obs[s], CT["obs"]), ("line", "Fitted model", sim[s], COLORS[s])],
+                           SERIES_LABELS[s]) for s in SERIES]
+        rt_fig = _panel([("line", "Rₜ", rt, COLORS["Rt"], 2.4)], rt_line=True, y_digits=1, y_title="Rₜ")
+        share_fig = _panel([("line", "Share still susceptible", [100 * v for v in fit["susceptible_share"]], "#A5B4FC", 2.2)],
+                           y_digits=0, y_title="% of the population")
+        psi_fig = _panel([("line", "Without vaccination (f_a = 1)", [100 * v for v in fit["psi_novac"]], CT["obs"], 2),
+                          ("line", "With vaccination", [100 * v for v in fit["psi"]], COLORS["ward"], 2.4)],
+                         y_digits=1, y_title="ψ(t) (%)")
+        weeks, wvals = _weekly(sim)
+        resid_fig = residual_chart(weeks, [dict(name=SERIES_LABELS[s], color=COLORS[s], values=wvals[s]) for s in SERIES],
+                                   _start, _end, cp_dates=vax_cps, vax=_vax)
+        pair = overlay_pair(vax_ov_preset, vax_ov_left, vax_ov_right)
+        names = {"Rₜ": "Rt", "Daily cases": "cases", "General ward": "ward", "ICU": "icu", "Daily deaths": "deaths"}
+
+        def side(n):
+            k = names[n]
+            if k == "Rt":
+                return dict(name=n, times=vax_times, values=rt, color=COLORS["Rt"], is_rt=True)
+            return dict(name=n, times=vax_times, values=sim[k], color=COLORS[k], is_rt=False)
+
+        ov_fig = overlay_chart(_start, _end, side(pair[0]), side(pair[1]), cp_dates=vax_cps, vax=_vax)
+        m = compute_metrics(vax_times, sim, vax_times, rt, _start, _end)
+
+        lbl = {"cases": "Cases", "ward": "Ward", "icu": "ICU", "deaths": "Deaths", "total": "Total"}
+        j_rows = [dict(Series=lbl[k], a=fit["J"][k]["total"], y20=fit["J"][k]["y2020"], y21=fit["J"][k]["y2021"]) for k in lbl]
+        param_rows = [dict(name=vax_param_symbol(p["name"]), value=fmt_sig(p["value"]), meaning=vax_param_meaning(p["name"]))
+                      for p in fit["params"]]
+        psi_days = ["2021-03-31", "2021-06-30", "2021-08-31", "2021-11-15", "2021-12-31"]
+        psi_rows = []
+        for dstr in psi_days:
+            i = iso_to_day(dstr) - iso_to_day(vax_data["start"])
+            a, b = fit["psi"][i], fit["psi_novac"][i]
+            psi_rows.append(dict(day=fmt_date(day_to_time(iso_to_day(dstr))), novac=f"{100 * b:.2f}%", vac=f"{100 * a:.2f}%",
+                                 red=f"{100 * (1 - a / b):.0f}%"))
+
+        def build_zip():
+            series_rows = [[iso(t), *[_obs[s][i] for s in SERIES], *[round(sim[s][i], 3) for s in SERIES],
+                            round(fit["psi"][i], 6), round(fit["psi_novac"][i], 6), round(rt[i], 4),
+                            round(fit["susceptible_share"][i], 6)] for i, t in enumerate(vax_times)]
+            files = {
+                "series.csv": to_csv(["date", *[f"observed_{s}" for s in SERIES], *[f"model_{s}" for s in SERIES],
+                                      "psi", "psi_without_vaccination", "Rt", "susceptible_share"], series_rows),
+                "estimated_parameters.csv": to_csv(["Parameter", "Estimate", "Meaning"],
+                                                   [[r["name"], r["value"], r["meaning"]] for r in param_rows]),
+                "objective_function_J.csv": to_csv(["Series", "Error J", "Error J 2020", "Error J 2021"],
+                                                   [[r["Series"], round(r["a"], 2), round(r["y20"], 2), round(r["y21"], 2)] for r in j_rows]),
+                "weekly_residual_breakdown.csv": to_csv(["week", *SERIES], [[fmt_date(w), *[round(wvals[s][i], 4) for s in SERIES]]
+                                                                           for i, w in enumerate(weeks)]),
+                "metrics.csv": to_csv(["Metric", "Simulated"], metrics_csv_rows(m)),
+                "fitted_model.html": figures_html(label, fit_figs),
+                "weekly_residual_breakdown.html": figures_html("Weekly squared log-residuals", [resid_fig]),
+                "effective_reproduction_number.html": figures_html("Effective reproduction number Rₜ", [rt_fig, share_fig]),
+                "hospitalisation_probability.html": figures_html("Hospitalisation probability ψ(t), with and without vaccination", [psi_fig]),
+                "overlay.html": figures_html(f"{pair[0]} (left) vs {pair[1]} (right) — simulated", [ov_fig]),
+            }
+            return zip_bytes(files)
+
+        download = mo.download(data=build_zip, filename=f"{key}_results.zip", label="Download results (ZIP)")
+        view = vax_view.value
+        if view == "Fit":
+            body = (legend([("dot", CT["obs"], "Observed"), ("line", CT["muted"], "Fitted model"),
+                            ("rule", CT["rule"], "Changepoint"), ("line", VAX_COLOR, "Start of vaccination")])
+                    + panel_grid([chart_card(chart(f, 260), COLORS[s]) for f, s in zip(fit_figs, SERIES)])
+                    + '<p class="small">Hover a panel to read the values of each day.</p>')
+        elif view == "Fit quality":
+            formula = mo.md(r"$$J = \sum_{s \,\in\, \{\text{cases, ward, ICU, deaths}\}} \sum_{t} \Big(\log(y_s(t)+1) - \log(\hat{y}_s(t)+1)\Big)^2$$")
+            jt = table([("Series", "Series", "b"), ("a", "Error J", "r"), ("y20", "2020", "r"), ("y21", "2021", "r")],
+                       [dict(Series=r["Series"], a=fmt_num(r["a"]), y20=fmt_num(r["y20"]), y21=fmt_num(r["y21"]),
+                             tot=r["Series"] == "Total") for r in j_rows], dense=True, highlight=lambda r: r["tot"])
+            body = (card(f'<div class="lede" style="font-size:14px"><p style="margin:0 0 12px">All parameters are estimated '
+                         'together by minimising the sum of squared log-residuals between each observed series and its simulated '
+                         f'counterpart, summed over the four series and the whole period:</p><div class="formula">{formula.text}</div></div>'
+                         f'<div style="margin-top:16px;max-width:34rem">{jt}</div>', "Objective function")
+                    + card(chart(resid_fig, 320), "Weekly residual breakdown", "Weekly sum of squared log-residuals, stacked by series.")
+                    + _glance())
+        elif view == "Parameters":
+            body = table([("name", "Parameter", "b nw"), ("value", "Estimate", "r"), ("meaning", "Meaning", "soft")], param_rows)
+        elif view == "Rₜ":
+            body = (card(chart(rt_fig, 300), "Effective reproduction number",
+                         "Rₜ = β(t)(1/γ_C + 1/γ_I) · (S(t) + (1 − p) S_V(t))/N. Vaccinated susceptibles count with weight "
+                         "(1 − p). Rₜ > 1: the epidemic grows. Rₜ < 1: the epidemic shrinks.")
+                    + card(chart(share_fig, 260), "Share of the population still susceptible",
+                           "(S(t) + (1 − p) S_V(t))/N. Within a period of constant β, Rₜ falls with it, as infection and "
+                           "vaccination remove people from S."))
+        elif view == "Hospitalisation probability":
+            pt = table([("day", "Day"), ("novac", "Without vaccination", "r"), ("vac", "With vaccination", "r"),
+                        ("red", "Reduction", "r")], psi_rows, dense=True)
+            body = (card(chart(psi_fig, 320), "Hospitalisation probability ψ(t), with and without vaccination",
+                         "Both curves use the parameters of this fit; the curve without vaccination sets f_a(t) = 1 in every age group.")
+                    + legend([("line", COLORS["ward"], "With vaccination"), ("line", CT["obs"], "Without vaccination (f_a = 1)"),
+                              ("rule", CT["rule"], "Changepoint"), ("line", VAX_COLOR, "Start of vaccination")])
+                    + f'<div style="max-width:34rem">{pt}</div>'
+                    + '<p class="small">The two curves are almost the same until April 2021, while coverage is low; they separate '
+                      'from May, as the groups aged 50+ are vaccinated. Both fall at the end of 2021, when cases rise much faster '
+                      'than hospital occupancy and testing increases sharply.</p>')
+        elif view == "Epidemic metrics":
+            body = metrics_view(m, f"Summary of the simulated trajectories over <strong>{fmt_date(_start)} – {fmt_date(_end)}</strong>.")
+        else:
+            body = card(f'<div class="stack-sm">{overlay_picker_html(vax_ov_preset, vax_ov_left, vax_ov_right)}'
+                        f"{chart(ov_fig, 360)}</div>", "Overlay",
+                        "Compare two simulated series on the same time axis, each with its own y-axis, so that their different "
+                        "scales do not matter.")
+        return f"""<div class="stack">
+          <div class="result-head"><div><h2>{label}</h2><p>{fmt_date(_start)} – {fmt_date(_end)}</p></div><div class="dl-wrap">{download}</div></div>
+          <div>{vax_view}</div>
+          <div class="stack">{body}</div></div>"""
+
+    def _fitted_tab(model, ran):
+        out = _vax_explainer(False)
+        if model is None:
+            out += empty_state("arrow-left", "Pick a model",
+                               "Choose Model 3a or Model 3b, then press <strong>Run model fitting</strong>. The table below "
+                               "compares the Error J of the two models.") + _glance()
+        elif ran != model:
+            out += empty_state("play", "Ready to run", "Press <strong>Run model fitting</strong> to see the fitted result. "
+                               "The table below compares the Error J of the two models.") + _glance()
+        else:
+            out += _result(model)
+        return f'<div class="stack">{out}</div>'
+
+    _out = None
+    if mode == "vaccination":
+        _tab = get_vax_tab()
+        if _tab == "Data and changepoints":
+            _html = _data_tab()
+        elif _tab == "Parameters":
+            _html = _params_tab(VAX_MODEL_BY_LABEL.get(vax_model.value))
+        else:
+            _html = _fitted_tab(VAX_MODEL_BY_LABEL.get(vax_model.value), get_vax_ran())
+        _out = page(mode, f'<div style="margin-top:20px">{_html}</div>')
+    _out
+    return
+
+
+# =========================================================================
+# Footer
+# =========================================================================
 
 
 @app.cell(hide_code=True)

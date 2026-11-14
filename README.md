@@ -30,7 +30,12 @@ marimo edit app.py         # the notebook, to change the code
    fixed parameters; save runs and compare them. These are the retrospective
    scenarios; prospective ones continue the fitted model after 31/12/2020 for up
    to 3 months, with a chosen change of β from 01/01/2021.
-4. **Model with vaccination**: not available yet.
+4. **Model with vaccination**: the age-stratified Models 3a and 3b with a
+   vaccinated-susceptible compartment, fitted by nonlinear least squares from
+   1 March 2020 to 31 December 2021, with nine changepoints of β. Views as in
+   mode 1 (fit, fit quality, parameters, Rₜ, epidemic metrics, overlay, ZIP
+   download), plus the hospitalisation probability ψ(t) with and without
+   vaccination (same parameters, f_a = 1).
 
 ## How it works
 
@@ -57,6 +62,9 @@ After new MATLAB/MCMC exports, refresh the data:
 python scripts/age_bayes_from_draws.py path/to/exports   # Model 3b summaries from its own draws
 python scripts/build_data.py path/to/exports
 ```
+
+Mode 4 reads `public/data/vaccination.json`, written directly by the MATLAB
+script `d2_2021_export_web.m` (thesis code, `Tese/D2`).
 
 Data: [DSSG Portugal](https://github.com/dssg-pt/covid19pt-data),
 [Our World in Data](https://github.com/owid/covid-19-data). Model based on
