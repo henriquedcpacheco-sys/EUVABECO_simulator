@@ -981,7 +981,7 @@ def _():
     _pdf = public_url("data/model_reference.pdf")
     _scheme = "".join(
         f'<img src="{public_url(f"data/model_reference-{i}.png")}" alt="Model reference, page {i}" loading="lazy">'
-        for i in (1, 2)
+        for i in (1, 2, 3)
     ) + (f'<a href="{_pdf}" download="model_reference.pdf" style="display:inline-flex;align-items:center;gap:8px;'
          f'font-size:13.5px;font-weight:500">{icon("file-down")}Download the equations (PDF)</a>')
 
