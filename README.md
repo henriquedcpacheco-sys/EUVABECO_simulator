@@ -35,11 +35,14 @@ marimo edit app.py         # the notebook, to change the code
    simulator (`simulate_vax()`) adds the vaccinated susceptibles S_V and steps one
    day at a time with that day's β, ψ, v, φ_h and φ_c.
 4. **Model with vaccination**: the age-stratified Models 3a and 3b with a
-   vaccinated-susceptible compartment, fitted by nonlinear least squares from
-   1 March 2020 to 31 December 2021, with nine changepoints of β. Views as in
-   mode 1 (fit, fit quality, parameters, Rₜ, epidemic metrics, overlay, ZIP
-   download), plus the hospitalisation probability ψ(t) with and without
-   vaccination (same parameters, f_a = 1).
+   vaccinated-susceptible compartment, fitted from 1 March 2020 to 31 December
+   2021, with nine changepoints of β, by nonlinear least squares (both models)
+   or by Bayesian inference (Model 3b: three DRAM chains of 200 000
+   iterations). Views as in mode 1 (fit with the 95% credible
+   and posterior predictive bands, fit quality, parameters, posterior
+   distributions, Rₜ, epidemic metrics, overlay, ZIP download), plus the
+   hospitalisation probability ψ(t) with and without vaccination (same
+   parameters, f_a = 1).
 
 ## How it works
 
@@ -67,8 +70,15 @@ python scripts/age_bayes_from_draws.py path/to/exports   # Model 3b summaries fr
 python scripts/build_data.py path/to/exports
 ```
 
-Mode 4 reads `public/data/vaccination.json`, written directly by the MATLAB
-script `d2_2021_export_web.m` (thesis code, `Tese/D2`).
+The Bayesian files of modes 1 and 2 (`*_bayes.json`) are written directly by
+`d2_app_bayes_export_uncorrected.m` (thesis code, `Tese/D2`), from three DRAM
+chains of 100 000 iterations per model; then
+`python scripts/update_bayes_uncorrected.py path/to/age_bayes_draws.csv`
+refreshes `age_draws.json` and `comparison.json`.
+
+Mode 4 reads `public/data/vaccination.json` and `public/data/vax_bayes.json`,
+written directly by the MATLAB scripts `d2_2021_export_web.m` and
+`d2_2021_vac_bayes_export.m` (thesis code, `Tese/D2`).
 
 Data: [DSSG Portugal](https://github.com/dssg-pt/covid19pt-data),
 [Our World in Data](https://github.com/owid/covid-19-data). Model based on

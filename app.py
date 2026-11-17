@@ -1237,10 +1237,10 @@ def _(
     def bands_explainer():
         return f"""<details class="exp"><summary><span class="ic">{icon("info")}</span>How the posterior was sampled and the two bands obtained<span class="chev">{icon("chevron-down")}</span></summary>
           <div class="in prose">
-          <p>A short pilot chain first tunes the sampler; three longer chains (one started at the least-squares estimate, two
-          started well away from it) are then run and pooled once they agree. The fitting is done on the effective sample size
-          of the time series: consecutive days tend to share the same deviation from the model, so the data carry fewer
-          independent observations than the raw number of days.</p>
+          <p>The likelihood treats the log-residuals of the four series, J above, as Gaussian with one noise variance σ²,
+          with uniform priors on the least-squares bounds of the parameters. A pilot chain of 20 000 iterations tunes the
+          DRAM sampler (mcmcstat); three chains of 100 000 iterations are then run, one started at the least-squares estimate
+          and two well away from it. The first half of each chain is discarded and the rest pooled (150 000 draws).</p>
           <p>500 parameter sets were taken from the chain, spread evenly over the pooled chains, and are used to build both bands.</p>
           <div class="cols2">
             <div><h4>95% credible interval: uncertainty in the model curve</h4><ul>
@@ -1998,48 +1998,59 @@ def _(mode):
     vax_data = load("vaccination")
     vax_times = [day_to_time(iso_to_day(vax_data["start"]) + i) for i in range(vax_data["n"])]
     vax_cps = [c["changepoint"] for c in vax_data["changepoints"]]
-    get_vax_ran, set_vax_ran = mo.state(None)                          # model of the last run
+    get_vax_ran, set_vax_ran = mo.state(None)                          # (model, method) of the last run
     get_vax_tab, set_vax_tab = mo.state("Data and changepoints")       # open tab
+    get_vax_bands, set_vax_bands = mo.state((True, True))              # Bayesian: (credible band shown, predictive band shown)
     vax_model = mo.ui.tabs({k: "" for k in VAX_MODEL_BY_LABEL}, orientation="vertical")
+    vax_method = mo.ui.dropdown(list(METHOD_BY_LABEL), value="Nonlinear least squares", full_width=True)
 
     def _run(clicks):
-        if vax_model.value:
-            set_vax_ran(VAX_MODEL_BY_LABEL[vax_model.value])
+        if vax_model.value and vax_method.value:
+            set_vax_ran((VAX_MODEL_BY_LABEL[vax_model.value], METHOD_BY_LABEL[vax_method.value]))
+            set_vax_bands((True, True))
             set_vax_tab("Fitted model")
         return clicks + 1
 
     vax_run = mo.ui.button(label="▶  Run model fitting", value=0, on_click=_run, kind="success", full_width=True)
     vax_ov_preset, vax_ov_left, vax_ov_right = overlay_widgets()
-    return (get_vax_ran, get_vax_tab, set_vax_tab, vax_cps, vax_data, vax_model, vax_ov_left, vax_ov_preset,
-            vax_ov_right, vax_run, vax_times)
+    return (get_vax_bands, get_vax_ran, get_vax_tab, set_vax_bands, set_vax_tab, vax_cps, vax_data, vax_method,
+            vax_model, vax_ov_left, vax_ov_preset, vax_ov_right, vax_run, vax_times)
 
 
 @app.cell(hide_code=True)
-def _(get_vax_tab, set_vax_tab):
+def _(get_vax_bands, get_vax_tab, set_vax_bands, set_vax_tab):
     vax_tabs = mo.ui.tabs({"Data and changepoints": "", "Parameters": "", "Fitted model": ""},
                           value=get_vax_tab(), on_change=set_vax_tab)
-    return (vax_tabs,)
+    # Bayesian results: one switch per band (each needs a global name of its own)
+    _cred, _pred = get_vax_bands()
+    vax_cred_switch = mo.ui.switch(value=_cred, label="**95% credible interval**",
+                                   on_change=lambda v: set_vax_bands((v, get_vax_bands()[1])))
+    vax_pred_switch = mo.ui.switch(value=_pred, label="**95% posterior predictive**",
+                                   on_change=lambda v: set_vax_bands((get_vax_bands()[0], v)))
+    vax_bands = mo.Html(f'<div style="display:flex;flex-wrap:wrap;gap:8px 32px">{vax_cred_switch}{vax_pred_switch}</div>')
+    return vax_bands, vax_cred_switch, vax_pred_switch, vax_tabs
 
 
 @app.cell(hide_code=True)
 def _(get_vax_ran):
-    # Views of a result (made again for each run, so a new run opens on "Fit")
-    _ = get_vax_ran()
-    vax_view = mo.ui.radio(["Fit", "Fit quality", "Parameters", "Rₜ", "Hospitalisation probability",
-                            "Epidemic metrics", "Overlay"], value="Fit", inline=True)
+    # Views of a result (made again for each run, so a new run opens on "Fit");
+    # a Bayesian run adds the posterior distributions.
+    _views = ["Fit", "Fit quality", "Parameters", "Rₜ", "Hospitalisation probability", "Epidemic metrics", "Overlay"]
+    if get_vax_ran() and get_vax_ran()[1] == "bayes":
+        _views.insert(3, "Posterior distributions")
+    vax_view = mo.ui.radio(_views, value="Fit", inline=True)
     return (vax_view,)
 
 
 @app.cell(hide_code=True)
-def _(mode, vax_model, vax_run):
+def _(mode, vax_method, vax_model, vax_run):
     # Left column of Mode 4
     _out = None
     if mode == "vaccination":
         _hint = ("Vaccination acts on each age group separately, so only the age-stratified models are extended. "
                  "The two differ in how the hospitalisation probability ψ is constructed.")
-        _method = ('<div class="soft-panel" style="font-size:13.5px">Nonlinear least squares<br>'
-                   '<span class="small">Bayesian fits are only available for 2020 (modes 1 and 2).</span></div>')
-        _body = (f'<div class="stack">{field(f"{vax_model}", "Model", _hint)}{field(_method, "Fitting method")}'
+        _mhint = "Bayesian inference (MCMC) is available for Model 3b."
+        _body = (f'<div class="stack">{field(f"{vax_model}", "Model", _hint)}{field(f"{vax_method}", "Fitting method", _mhint)}'
                  f'<div class="run-wrap">{vax_run}</div></div>')
         _out = page(mode, card(_body, "Set up the fit", "1 March 2020 – 31 December 2021. Choose a model.",
                                "sliders-horizontal", accent=True), "side")
@@ -2055,15 +2066,18 @@ def _(mode, vax_tabs):
 
 @app.cell(hide_code=True)
 def _(
+    get_vax_bands,
     get_vax_ran,
     get_vax_tab,
     mode,
+    vax_bands,
     vax_cps,
     vax_data,
     vax_model,
     vax_ov_left,
     vax_ov_preset,
     vax_ov_right,
+    vax_method,
     vax_times,
     vax_view,
 ):
@@ -2195,19 +2209,62 @@ def _(
                 vals[s][-1] += float(r * r)
         return weeks, vals
 
-    def _result(key):
-        fit = vax_data["models"][key]
-        sim, rt = fit["sim"], fit["rt"]
-        label = f"{VAX_MODELS[key][0]}, {VAX_MODELS[key][2].lower()} · with vaccination"
+    def _bands_explainer(post):
+        ch = post["chains"]
+        return f"""<details class="exp"><summary><span class="ic">{icon("info")}</span>How the posterior was sampled and the two bands obtained<span class="chev">{icon("chevron-down")}</span></summary>
+          <div class="in prose">
+          <p>The likelihood treats the log-residuals of the four series, J above, as Gaussian with one noise variance σ²,
+          with uniform priors on the least-squares bounds of the parameters. A pilot chain of 20 000 iterations tunes the
+          DRAM sampler (mcmcstat); {ch["n_chains"]} chains of {ch["iterations"]:,} iterations are then run, one started at the
+          least-squares estimate and two well away from it. The first half of each chain is discarded and the rest pooled
+          ({ch["pooled"]:,} draws).</p>
+          <p>500 parameter sets were taken from the pooled chains, evenly spaced, and are used to build both bands.</p>
+          <div class="cols2">
+            <div><h4>95% credible interval: uncertainty in the model curve</h4><ul>
+              <li>Each of the 500 parameter sets is run through the model with vaccination, giving 500 trajectories per series.</li>
+              <li>On each day, the band goes from the 2.5% to the 97.5% quantile of those 500 values.</li></ul></div>
+            <div><h4>95% posterior predictive interval</h4><ul>
+              <li>Each of the 500 trajectories is multiplied on each day by exp(ε), with ε ~ N(0, σ²) and σ² saved at the
+              same MCMC iteration as the parameter set: the same log-scale noise the model is fit with.</li>
+              <li>On each day, the band goes from the 2.5% to the 97.5% quantile of those 500 noisy values: the range a new
+              observation on that day could plausibly fall in.</li></ul></div></div></div></details>"""
 
-        fit_figs = [_panel([("dots", "Observed", _obs[s], CT["obs"]), ("line", "Fitted model", sim[s], COLORS[s])],
-                           SERIES_LABELS[s]) for s in SERIES]
+    def _result(key, bayes):
+        fit = vax_data["models"][key]
+        post = load("vax_bayes") if bayes else None
+        src = post if bayes else fit
+        sim = post["bands"]["point_est"] if bayes else fit["sim"]
+        rt = src["rt"]
+        label = (f"{VAX_MODELS[key][0]}, {VAX_MODELS[key][2].lower()} · with vaccination"
+                 + (" · Bayesian posterior" if bayes else ""))
+
+        fit_figs = []
+        for s in SERIES:
+            if bayes:
+                b = post["bands"]
+                show_cred, show_pred = get_vax_bands()
+                layers = []
+                if show_pred:
+                    layers.append(("band", "95% predictive", b["obs_lo"][s], b["obs_hi"][s], COLORS[s], 0.16))
+                if show_cred:
+                    layers.append(("band", "95% credible", b["pred_lo"][s], b["pred_hi"][s], COLORS[s], 0.38))
+                layers += [("dots", "Observed", _obs[s], CT["obs"]), ("line", "Model (posterior mean)", sim[s], DEEP[s], 2)]
+            else:
+                layers = [("dots", "Observed", _obs[s], CT["obs"]), ("line", "Fitted model", sim[s], COLORS[s])]
+            fit_figs.append(_panel(layers, SERIES_LABELS[s]))
         rt_fig = _panel([("line", "Rₜ", rt, COLORS["Rt"], 2.4)], rt_line=True, y_digits=1, y_title="Rₜ")
-        share_fig = _panel([("line", "Share still susceptible", [100 * v for v in fit["susceptible_share"]], "#A5B4FC", 2.2)],
+        share_fig = _panel([("line", "Share still susceptible", [100 * v for v in src["susceptible_share"]], "#A5B4FC", 2.2)],
                            y_digits=0, y_title="% of the population")
-        psi_fig = _panel([("line", "Without vaccination (f_a = 1)", [100 * v for v in fit["psi_novac"]], CT["obs"], 2),
-                          ("line", "With vaccination", [100 * v for v in fit["psi"]], COLORS["ward"], 2.4)],
+        psi_fig = _panel([("line", "Without vaccination (f_a = 1)", [100 * v for v in src["psi_novac"]], CT["obs"], 2),
+                          ("line", "With vaccination", [100 * v for v in src["psi"]], COLORS["ward"], 2.4)],
                          y_digits=1, y_title="ψ(t) (%)")
+        hist_figs = []
+        if bayes:
+            for bp in post["params"]:
+                hst = post["hist"].get(bp["name"])
+                if hst:
+                    hist_figs.append(histogram_chart(vax_param_symbol(bp["name"]), hst["edges"], hst["counts"],
+                                                     bp["post_mean"], bp["point_est"], bp["ci_low"], bp["ci_high"]))
         weeks, wvals = _weekly(sim)
         resid_fig = residual_chart(weeks, [dict(name=SERIES_LABELS[s], color=COLORS[s], values=wvals[s]) for s in SERIES],
                                    _start, _end, cp_dates=vax_cps, vax=_vax)
@@ -2224,28 +2281,42 @@ def _(
         m = compute_metrics(vax_times, sim, vax_times, rt, _start, _end)
 
         lbl = {"cases": "Cases", "ward": "Ward", "icu": "ICU", "deaths": "Deaths", "total": "Total"}
-        j_rows = [dict(Series=lbl[k], a=fit["J"][k]["total"], y20=fit["J"][k]["y2020"], y21=fit["J"][k]["y2021"]) for k in lbl]
-        param_rows = [dict(name=vax_param_symbol(p["name"]), value=fmt_sig(p["value"]), meaning=vax_param_meaning(p["name"]))
-                      for p in fit["params"]]
+        if bayes:
+            f = post["fit"]
+            j_rows = [dict(Series=lbl[k], a=f["J_post_mean_params"][k], b=f["J_draws_mean"][k],
+                           lo=f["J_draws_lo"][k], hi=f["J_draws_hi"][k]) for k in lbl]
+            param_rows = [dict(name=vax_param_symbol(p["name"]), ls=fmt_sig(p["point_est"]), mean=fmt_sig(p["post_mean"]),
+                               ci=f"[{fmt_sig(p['ci_low'])}, {fmt_sig(p['ci_high'])}]",
+                               meaning=vax_param_meaning(p["name"])) for p in post["params"]]
+        else:
+            j_rows = [dict(Series=lbl[k], a=fit["J"][k]["total"], y20=fit["J"][k]["y2020"], y21=fit["J"][k]["y2021"]) for k in lbl]
+            param_rows = [dict(name=vax_param_symbol(p["name"]), value=fmt_sig(p["value"]), meaning=vax_param_meaning(p["name"]))
+                          for p in fit["params"]]
         psi_days = ["2021-03-31", "2021-06-30", "2021-08-31", "2021-11-15", "2021-12-31"]
         psi_rows = []
         for dstr in psi_days:
             i = iso_to_day(dstr) - iso_to_day(vax_data["start"])
-            a, b = fit["psi"][i], fit["psi_novac"][i]
+            a, b = src["psi"][i], src["psi_novac"][i]
             psi_rows.append(dict(day=fmt_date(day_to_time(iso_to_day(dstr))), novac=f"{100 * b:.2f}%", vac=f"{100 * a:.2f}%",
                                  red=f"{100 * (1 - a / b):.0f}%"))
 
         def build_zip():
             series_rows = [[iso(t), *[_obs[s][i] for s in SERIES], *[round(sim[s][i], 3) for s in SERIES],
-                            round(fit["psi"][i], 6), round(fit["psi_novac"][i], 6), round(rt[i], 4),
-                            round(fit["susceptible_share"][i], 6)] for i, t in enumerate(vax_times)]
+                            round(src["psi"][i], 6), round(src["psi_novac"][i], 6), round(rt[i], 4),
+                            round(src["susceptible_share"][i], 6)] for i, t in enumerate(vax_times)]
             files = {
                 "series.csv": to_csv(["date", *[f"observed_{s}" for s in SERIES], *[f"model_{s}" for s in SERIES],
                                       "psi", "psi_without_vaccination", "Rt", "susceptible_share"], series_rows),
-                "estimated_parameters.csv": to_csv(["Parameter", "Estimate", "Meaning"],
-                                                   [[r["name"], r["value"], r["meaning"]] for r in param_rows]),
-                "objective_function_J.csv": to_csv(["Series", "Error J", "Error J 2020", "Error J 2021"],
-                                                   [[r["Series"], round(r["a"], 2), round(r["y20"], 2), round(r["y21"], 2)] for r in j_rows]),
+                "estimated_parameters.csv": (
+                    to_csv(["Parameter", "Least-squares estimate", "Posterior mean", "95% CI", "Meaning"],
+                           [[r["name"], r["ls"], r["mean"], r["ci"], r["meaning"]] for r in param_rows])
+                    if bayes else to_csv(["Parameter", "Estimate", "Meaning"], [[r["name"], r["value"], r["meaning"]] for r in param_rows])),
+                "objective_function_J.csv": (
+                    to_csv(["Series", "Error J at posterior-mean parameters", "Posterior mean of Error J", "95% interval of Error J"],
+                           [[r["Series"], round(r["a"], 2), round(r["b"], 2), f"[{fmt_num(r['lo'])}, {fmt_num(r['hi'])}]"] for r in j_rows])
+                    if bayes else
+                    to_csv(["Series", "Error J", "Error J 2020", "Error J 2021"],
+                           [[r["Series"], round(r["a"], 2), round(r["y20"], 2), round(r["y21"], 2)] for r in j_rows])),
                 "weekly_residual_breakdown.csv": to_csv(["week", *SERIES], [[fmt_date(w), *[round(wvals[s][i], 4) for s in SERIES]]
                                                                            for i, w in enumerate(weeks)]),
                 "metrics.csv": to_csv(["Metric", "Simulated"], metrics_csv_rows(m)),
@@ -2255,28 +2326,85 @@ def _(
                 "hospitalisation_probability.html": figures_html("Hospitalisation probability ψ(t), with and without vaccination", [psi_fig]),
                 "overlay.html": figures_html(f"{pair[0]} (left) vs {pair[1]} (right) — simulated", [ov_fig]),
             }
+            if bayes:
+                b = post["bands"]
+                files["bands.csv"] = to_csv(
+                    ["date", *[f"{s}_{c}" for s in SERIES for c in
+                               ("observed", "posterior_mean_model", "credible_lo", "credible_hi", "predictive_lo", "predictive_hi")]],
+                    [[iso(t), *[v for s in SERIES for v in (_obs[s][i], round(b["point_est"][s][i], 3), round(b["pred_lo"][s][i], 3),
+                                                           round(b["pred_hi"][s][i], 3), round(b["obs_lo"][s][i], 3),
+                                                           round(b["obs_hi"][s][i], 3))]]
+                     for i, t in enumerate(vax_times)])
+                files["posterior_histograms.html"] = figures_html("Posterior distributions of the parameters", hist_figs)
             return zip_bytes(files)
 
-        download = mo.download(data=build_zip, filename=f"{key}_results.zip", label="Download results (ZIP)")
+        download = mo.download(data=build_zip, filename=f"{key}{'_bayes' if bayes else ''}_results.zip",
+                               label="Download results (ZIP)")
+        hist_legend = (legend([("band-light", CT["obs"], f"Histogram of {post['nDraws']} posterior draws, evenly spaced over the pooled chains"),
+                               ("line", CT["window"], "Posterior mean"), ("dash", CT["text"], "Least-squares estimate"),
+                               ("window", CT["window"], "95% CI")]) if bayes else "")
         view = vax_view.value
         if view == "Fit":
-            body = (legend([("dot", CT["obs"], "Observed"), ("line", CT["muted"], "Fitted model"),
-                            ("rule", CT["rule"], "Changepoint"), ("line", VAX_COLOR, "Start of vaccination")])
-                    + panel_grid([chart_card(chart(f, 260), COLORS[s]) for f, s in zip(fit_figs, SERIES)])
-                    + '<p class="small">Hover a panel to read the values of each day.</p>')
+            if bayes:
+                show_cred, show_pred = get_vax_bands()
+                leg = legend([("dot", CT["obs"], "Observed"), ("line", CT["muted"], "Model at posterior-mean parameters"),
+                              *([("band", CT["muted"], "95% credible interval")] if show_cred else []),
+                              *([("band-light", CT["muted"], "95% posterior predictive")] if show_pred else []),
+                              ("rule", CT["rule"], "Changepoint"), ("line", VAX_COLOR, "Start of vaccination")])
+            else:
+                leg = legend([("dot", CT["obs"], "Observed"), ("line", CT["muted"], "Fitted model"),
+                              ("rule", CT["rule"], "Changepoint"), ("line", VAX_COLOR, "Start of vaccination")])
+            body = (leg + panel_grid([chart_card(chart(f, 260), COLORS[s]) for f, s in zip(fit_figs, SERIES)])
+                    + '<p class="small">Hover a panel to read the values of each day.</p>'
+                    + (_bands_explainer(post) if bayes else ""))
         elif view == "Fit quality":
             formula = mo.md(r"$$J = \sum_{s \,\in\, \{\text{cases, ward, ICU, deaths}\}} \sum_{t} \Big(\log(y_s(t)+1) - \log(\hat{y}_s(t)+1)\Big)^2$$")
-            jt = table([("Series", "Series", "b"), ("a", "Error J", "r"), ("y20", "2020", "r"), ("y21", "2021", "r")],
-                       [dict(Series=r["Series"], a=fmt_num(r["a"]), y20=fmt_num(r["y20"]), y21=fmt_num(r["y21"]),
-                             tot=r["Series"] == "Total") for r in j_rows], dense=True, highlight=lambda r: r["tot"])
-            body = (card(f'<div class="lede" style="font-size:14px"><p style="margin:0 0 12px">All parameters are estimated '
-                         'together by minimising the sum of squared log-residuals between each observed series and its simulated '
-                         f'counterpart, summed over the four series and the whole period:</p><div class="formula">{formula.text}</div></div>'
-                         f'<div style="margin-top:16px;max-width:34rem">{jt}</div>', "Objective function")
-                    + card(chart(resid_fig, 320), "Weekly residual breakdown", "Weekly sum of squared log-residuals, stacked by series.")
+            if bayes:
+                jt = table([("Series", "Series", "b"), ("a", "Error J at posterior-mean parameters", "r"),
+                            ("b", "Posterior mean of Error J", "r"), ("ci", "95% interval of Error J", "r")],
+                           [dict(Series=r["Series"], a=fmt_num(r["a"]), b=fmt_num(r["b"]),
+                                 ci=f"[{fmt_num(r['lo'])}, {fmt_num(r['hi'])}]", tot=r["Series"] == "Total") for r in j_rows],
+                           dense=True, highlight=lambda r: r["tot"])
+                s2 = post["sigma2"]
+                intro = ("The residuals are the same log-residuals as in the least-squares fit, now taken between the data and the "
+                         "<strong>solid line</strong> (the model run with the posterior mean of each parameter):")
+                more = ("<p>Since every parameter set in the posterior gives its own curve, Error J is also computed for each of "
+                        "the 500 parameter sets used for the bands, giving a posterior mean and a 95% interval for Error J. "
+                        f"The noise variance of the log-residuals is σ² = {s2['post_mean']:.3f} "
+                        f"(95% CI [{s2['ci_low']:.3f}, {s2['ci_high']:.3f}]).</p>")
+                after = ('<p class="small" style="margin-top:12px">The least-squares fit is, by construction, the parameter set with '
+                         f'the lowest Error J ({fmt_num(fit["J"]["total"]["total"])}), so the posterior-mean curve has a slightly '
+                         'higher Error J, and the posterior mean of Error J, which averages over all plausible parameter sets, is '
+                         'higher still.</p>')
+            else:
+                jt = table([("Series", "Series", "b"), ("a", "Error J", "r"), ("y20", "2020", "r"), ("y21", "2021", "r")],
+                           [dict(Series=r["Series"], a=fmt_num(r["a"]), y20=fmt_num(r["y20"]), y21=fmt_num(r["y21"]),
+                                 tot=r["Series"] == "Total") for r in j_rows], dense=True, highlight=lambda r: r["tot"])
+                intro = ("All parameters are estimated together by minimising the sum of squared log-residuals between each "
+                         "observed series and its simulated counterpart, summed over the four series and the whole period:")
+                more, after = "", ""
+            body = (card(f'<div class="lede" style="font-size:14px"><p style="margin:0 0 12px">{intro}</p>'
+                         f'<div class="formula">{formula.text}</div>{more}</div>'
+                         f'<div style="margin-top:16px;max-width:40rem">{jt}</div>{after}',
+                         "Fit quality of the posterior" if bayes else "Objective function")
+                    + card(chart(resid_fig, 320), "Weekly residual breakdown", "Weekly sum of squared log-residuals, stacked by series"
+                           + (", between the data and the model at the posterior-mean parameters." if bayes else "."))
                     + _glance())
         elif view == "Parameters":
-            body = table([("name", "Parameter", "b nw"), ("value", "Estimate", "r"), ("meaning", "Meaning", "soft")], param_rows)
+            if bayes:
+                ch = post["chains"]
+                pt = table([("name", "Parameter", "b nw"), ("ls", "Least-squares estimate", "r"), ("mean", "Posterior mean", "r"),
+                            ("ci", "95% CI", "r nw"), ("meaning", "Meaning", "soft")],
+                           param_rows)
+                body = (pt + f'<p class="small">Least-squares estimate: the least-squares fit, used as the starting point of the '
+                        f'centred chain. Posterior mean and 95% CI: from the {ch["pooled"]:,} pooled draws (second half of '
+                        f'{ch["n_chains"]} chains of {ch["iterations"]:,} iterations).</p>'
+                        '<h3 class="sec">Posterior distributions of the parameters</h3>' + hist_legend
+                        + panel_grid([chart_card(chart(f, 170)) for f in hist_figs], cols=4))
+            else:
+                body = table([("name", "Parameter", "b nw"), ("value", "Estimate", "r"), ("meaning", "Meaning", "soft")], param_rows)
+        elif view == "Posterior distributions":
+            body = hist_legend + panel_grid([chart_card(chart(f, 200)) for f in hist_figs], cols=4)
         elif view == "Rₜ":
             body = (card(chart(rt_fig, 300), "Effective reproduction number",
                          "Rₜ = β(t)(1/γ_C + 1/γ_I) · (S(t) + (1 − p) S_V(t))/N. Vaccinated susceptibles count with weight "
@@ -2302,22 +2430,29 @@ def _(
                         f"{chart(ov_fig, 360)}</div>", "Overlay",
                         "Compare two simulated series on the same time axis, each with its own y-axis, so that their different "
                         "scales do not matter.")
+        bands_panel = (f'<div class="soft-panel">{vax_bands}<span class="hint-under">Show or hide each 95% band in the '
+                       'plots.</span></div>' if bayes else "")
         return f"""<div class="stack">
           <div class="result-head"><div><h2>{label}</h2><p>{fmt_date(_start)} – {fmt_date(_end)}</p></div><div class="dl-wrap">{download}</div></div>
+          {bands_panel}
           <div>{vax_view}</div>
           <div class="stack">{body}</div></div>"""
 
-    def _fitted_tab(model, ran):
+    def _fitted_tab(model, method, ran):
         out = _vax_explainer(False)
         if model is None:
             out += empty_state("arrow-left", "Pick a model",
                                "Choose Model 3a or Model 3b, then press <strong>Run model fitting</strong>. The table below "
                                "compares the Error J of the two models.") + _glance()
-        elif ran != model:
+        elif method == "bayes" and model != "age_point_vac":     # the MCMC was run for Model 3b only
+            out += empty_state("info", "Bayesian inference is available for Model 3b",
+                               "Choose Model 3b for the Bayesian posterior, or <strong>Nonlinear least squares</strong> for "
+                               "Model 3a.") + _glance()
+        elif ran != (model, method):
             out += empty_state("play", "Ready to run", "Press <strong>Run model fitting</strong> to see the fitted result. "
                                "The table below compares the Error J of the two models.") + _glance()
         else:
-            out += _result(model)
+            out += _result(model, method == "bayes")
         return f'<div class="stack">{out}</div>'
 
     _out = None
@@ -2328,7 +2463,7 @@ def _(
         elif _tab == "Parameters":
             _html = _params_tab(VAX_MODEL_BY_LABEL.get(vax_model.value))
         else:
-            _html = _fitted_tab(VAX_MODEL_BY_LABEL.get(vax_model.value), get_vax_ran())
+            _html = _fitted_tab(VAX_MODEL_BY_LABEL.get(vax_model.value), METHOD_BY_LABEL.get(vax_method.value), get_vax_ran())
         _out = page(mode, f'<div style="margin-top:20px">{_html}</div>')
     _out
     return
